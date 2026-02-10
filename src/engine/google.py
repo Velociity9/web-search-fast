@@ -17,7 +17,6 @@ class GoogleSearchEngine(BaseSearchEngine):
     name: str = "google"
 
     def build_search_url(self, query: str, page: int = 1) -> str:
-        """Build Google search URL."""
         encoded_query = quote_plus(query)
         start = (page - 1) * 10
         url = f"https://www.google.com/search?q={encoded_query}&num=10"
@@ -25,14 +24,32 @@ class GoogleSearchEngine(BaseSearchEngine):
             url += f"&start={start}"
         return url
 
+    async def search(self, page: Page, query: str, max_results: int = 10) -> list[SearchResult]:
+        """Override to warm up Google session before searching."""
+        # Visit Google homepage first to establish cookies
+        try:
+            await page.goto("https://www.google.com/", timeout=15000)
+            await page.wait_for_load_state("networkidle", timeout=10000)
+        except Exception:
+            logger.debug("Google homepage warm-up failed, proceeding anyway")
+
+        # Now perform the actual search
+        url = self.build_search_url(query, 1)
+        await page.goto(url, timeout=30000)
+        await page.wait_for_load_state("networkidle", timeout=15000)
+
+        # Extra wait for JS rendering
+        await page.wait_for_timeout(2000)
+
+        return await self.parse_results(page, max_results)
+
     async def parse_results(self, page: Page, max_results: int = 10) -> list[SearchResult]:
-        """Parse search results from Google SERP."""
         results: list[SearchResult] = []
 
-        # Detect if blocked by Google
+        # Detect if blocked
         current_url = page.url
         if "/sorry/" in current_url or "captcha" in current_url.lower():
-            logger.warning("Google blocked the request (captcha/sorry page), returning empty results")
+            logger.warning("Google blocked the request (captcha/sorry page)")
             return results
 
         # Try multiple selectors for result containers
@@ -49,7 +66,6 @@ class GoogleSearchEngine(BaseSearchEngine):
             if len(results) >= max_results:
                 break
             try:
-                # Extract title
                 title_el = await element.query_selector("h3")
                 if not title_el:
                     continue
@@ -57,7 +73,6 @@ class GoogleSearchEngine(BaseSearchEngine):
                 if not title:
                     continue
 
-                # Extract URL
                 link_el = await element.query_selector("a")
                 if not link_el:
                     continue
@@ -65,7 +80,6 @@ class GoogleSearchEngine(BaseSearchEngine):
                 if not url or not url.startswith("http"):
                     continue
 
-                # Extract snippet via multiple selectors
                 snippet = ""
                 for selector in ("div[data-sncf]", "div.VwiC3b", "div.IsZvec"):
                     snippet_el = await element.query_selector(selector)

@@ -48,7 +48,7 @@ logger = logging.getLogger(__name__)
 
 # Fallback order when primary engine returns no results
 _fallback_order: dict[SearchEngine, list[SearchEngine]] = {
-    SearchEngine.GOOGLE: [SearchEngine.BING, SearchEngine.DUCKDUCKGO],
+    SearchEngine.GOOGLE: [SearchEngine.DUCKDUCKGO, SearchEngine.BING],
     SearchEngine.BING: [SearchEngine.DUCKDUCKGO, SearchEngine.GOOGLE],
     SearchEngine.DUCKDUCKGO: [SearchEngine.BING, SearchEngine.GOOGLE],
 }

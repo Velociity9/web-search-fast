@@ -19,6 +19,10 @@ class BrowserConfig(BaseModel):
     pool_size: int = Field(default=5, ge=1, le=20, description="Number of browser instances in pool")
     headless: bool = Field(default=True)
     timeout: int = Field(default=30, ge=5, le=120, description="Page load timeout in seconds")
+    geoip: bool = Field(default=True, description="Enable GeoIP spoofing based on real IP")
+    humanize: float = Field(default=2.0, ge=0, description="Humanized cursor movement duration (0 to disable)")
+    locale: str = Field(default="en-US", description="Browser locale")
+    block_images: bool = Field(default=True, description="Block image loading for faster page loads")
 
 
 class AppConfig(BaseModel):
