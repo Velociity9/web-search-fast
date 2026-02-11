@@ -27,7 +27,11 @@ async def _ensure_pool() -> BrowserPool:
     """Return the global BrowserPool, starting it on first call."""
     global _pool_instance, _pool_started
     if _pool_instance is not None and _pool_started:
+        logger.debug("[pool] already started, returning singleton")
         return _pool_instance
+    logger.info("[pool] cold start — initializing BrowserPool ...")
+    import time as _t
+    t0 = _t.monotonic()
     from src.config import get_config
     from src.scraper.browser import BrowserPool
 
@@ -42,7 +46,7 @@ async def _ensure_pool() -> BrowserPool:
     )
     await _pool_instance.start()
     _pool_started = True
-    logger.info("BrowserPool ready (size=%d)", config.browser.pool_size)
+    logger.info("[pool] BrowserPool ready (size=%d) in %.1fms", config.browser.pool_size, (_t.monotonic() - t0) * 1000)
     return _pool_instance
 
 
@@ -63,8 +67,11 @@ async def _shutdown_pool() -> None:
 @asynccontextmanager
 async def lifespan(server: FastMCP) -> AsyncIterator[dict]:
     """Each MCP session gets a ref to the shared pool."""
+    logger.info("[lifespan] session starting — acquiring pool")
     pool = await _ensure_pool()
+    logger.info("[lifespan] session ready — pool._started=%s", pool._started)
     yield {"pool": pool}
+    logger.info("[lifespan] session ending")
 
 
 mcp = FastMCP(
@@ -101,12 +108,17 @@ async def web_search(
     ctx: Context = None,
 ) -> str:
     """Search the web and return results as markdown."""
+    import time as _t
+    t0 = _t.monotonic()
+    logger.info("[web_search] called: query=%r engine=%s depth=%d max_results=%d", query, engine, depth, max_results)
+
     from src.api.schemas import SearchRequest
     from src.config import SearchEngine
     from src.core.search import SearchError, do_search
     from src.formatter.markdown_fmt import format_markdown
 
     pool: BrowserPool = ctx.request_context.lifespan_context["pool"]
+    logger.debug("[web_search] pool acquired, _started=%s", pool._started)
 
     try:
         search_engine = SearchEngine(engine.lower())
@@ -124,12 +136,16 @@ async def web_search(
             max_results=max_results,
             timeout=60,
         )
+        logger.info("[web_search] starting search ...")
         response = await do_search(pool, req)
-        return format_markdown(response)
+        result = format_markdown(response)
+        logger.info("[web_search] done in %.0fms, %d results", (_t.monotonic() - t0) * 1000, response.total)
+        return result
     except SearchError as e:
+        logger.error("[web_search] SearchError: %s", e)
         return f"Search error: {e}"
     except Exception as e:
-        logger.exception("Unexpected error in web_search tool")
+        logger.exception("[web_search] unexpected error")
         return f"Error: {e}"
 
 
@@ -202,12 +218,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Web Search MCP Server")
     parser.add_argument(
         "--transport",
-        choices=["stdio", "sse"],
-        default="sse",
-        help="Transport protocol (default: sse)",
+        choices=["stdio", "sse", "http"],
+        default="http",
+        help="Transport protocol (default: http)",
     )
-    parser.add_argument("--host", default="127.0.0.1", help="SSE bind host (default: 127.0.0.1)")
-    parser.add_argument("--port", type=int, default=8897, help="SSE bind port (default: 8897)")
+    parser.add_argument("--host", default="127.0.0.1", help="Bind host (default: 127.0.0.1)")
+    parser.add_argument("--port", type=int, default=8897, help="Bind port (default: 8897)")
     args = parser.parse_args()
 
     if args.transport == "stdio":
@@ -222,18 +238,22 @@ def main() -> None:
             format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
         )
 
-    if args.transport == "sse":
-        # SSE: pre-warm browser pool before accepting connections
+    if args.transport in ("sse", "http"):
         mcp.settings.host = args.host
         mcp.settings.port = args.port
 
         import uvicorn
 
-        starlette_app = mcp.sse_app()
+        if args.transport == "http":
+            starlette_app = mcp.streamable_http_app()
+            endpoint_path = "/mcp"
+        else:
+            starlette_app = mcp.sse_app()
+            endpoint_path = "/sse"
 
         async def serve() -> None:
             await _ensure_pool()
-            logger.info("SSE server starting on %s:%d", args.host, args.port)
+            logger.info("%s server starting on %s:%d", args.transport.upper(), args.host, args.port)
             config = uvicorn.Config(starlette_app, host=args.host, port=args.port, log_level="info")
             server = uvicorn.Server(config)
             loop = asyncio.get_event_loop()

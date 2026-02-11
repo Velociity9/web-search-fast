@@ -28,18 +28,16 @@ class GoogleSearchEngine(BaseSearchEngine):
         """Override to warm up Google session before searching."""
         # Visit Google homepage first to establish cookies
         try:
-            await page.goto("https://www.google.com/", timeout=15000)
-            await page.wait_for_load_state("networkidle", timeout=10000)
+            await self._navigate(page, "https://www.google.com/", retries=1)
         except Exception:
             logger.debug("Google homepage warm-up failed, proceeding anyway")
 
         # Now perform the actual search
         url = self.build_search_url(query, 1)
-        await page.goto(url, timeout=30000)
-        await page.wait_for_load_state("networkidle", timeout=15000)
+        await self._navigate(page, url)
 
-        # Extra wait for JS rendering
-        await page.wait_for_timeout(2000)
+        # Brief wait for JS rendering
+        await page.wait_for_timeout(1000)
 
         return await self.parse_results(page, max_results)
 
