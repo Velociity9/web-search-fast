@@ -23,7 +23,9 @@ def _mock_ctx(started: bool = True) -> MagicMock:
     pool = MagicMock()
     pool._started = started
     pool._pool_size = 5
-    ctx.request_context.lifespan_context = {"pool": pool}
+    lazy_pool = AsyncMock()
+    lazy_pool.get.return_value = pool
+    ctx.request_context.lifespan_context = {"lazy_pool": lazy_pool}
     return ctx
 
 

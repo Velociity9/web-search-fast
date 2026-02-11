@@ -17,25 +17,45 @@ from src.scraper.browser import BrowserPool
 logger = logging.getLogger(__name__)
 
 
+class LazyBrowserPool:
+    """Lazy-init wrapper: BrowserPool starts on first use, not at MCP handshake."""
+
+    def __init__(self) -> None:
+        self._pool: BrowserPool | None = None
+        self._started = False
+
+    async def get(self) -> BrowserPool:
+        if self._pool is not None and self._started:
+            return self._pool
+        config = get_config()
+        self._pool = BrowserPool(
+            pool_size=config.browser.pool_size,
+            headless=config.browser.headless,
+            geoip=config.browser.geoip,
+            humanize=config.browser.humanize,
+            locale=config.browser.locale,
+            block_images=config.browser.block_images,
+        )
+        await self._pool.start()
+        self._started = True
+        logger.info("MCP server: BrowserPool started (size=%d)", config.browser.pool_size)
+        return self._pool
+
+    async def stop(self) -> None:
+        if self._pool and self._started:
+            await self._pool.stop()
+            self._started = False
+            logger.info("MCP server: BrowserPool stopped")
+
+
 @asynccontextmanager
 async def lifespan(server: FastMCP) -> AsyncIterator[dict]:
-    """Manage BrowserPool lifecycle for MCP server."""
-    config = get_config()
-    pool = BrowserPool(
-        pool_size=config.browser.pool_size,
-        headless=config.browser.headless,
-        geoip=config.browser.geoip,
-        humanize=config.browser.humanize,
-        locale=config.browser.locale,
-        block_images=config.browser.block_images,
-    )
-    await pool.start()
-    logger.info("MCP server: BrowserPool started (size=%d)", config.browser.pool_size)
+    """Manage lazy BrowserPool lifecycle for MCP server."""
+    lazy_pool = LazyBrowserPool()
     try:
-        yield {"pool": pool}
+        yield {"lazy_pool": lazy_pool}
     finally:
-        await pool.stop()
-        logger.info("MCP server: BrowserPool stopped")
+        await lazy_pool.stop()
 
 
 mcp = FastMCP(
@@ -67,7 +87,8 @@ async def web_search(
     ctx: Context = None,
 ) -> str:
     """Search the web and return results as markdown."""
-    pool: BrowserPool = ctx.request_context.lifespan_context["pool"]
+    lazy_pool: LazyBrowserPool = ctx.request_context.lifespan_context["lazy_pool"]
+    pool = await lazy_pool.get()
 
     try:
         search_engine = SearchEngine(engine.lower())
@@ -106,7 +127,8 @@ async def get_page_content(
     ctx: Context = None,
 ) -> str:
     """Fetch and extract content from a specific URL."""
-    pool: BrowserPool = ctx.request_context.lifespan_context["pool"]
+    lazy_pool: LazyBrowserPool = ctx.request_context.lifespan_context["lazy_pool"]
+    pool = await lazy_pool.get()
 
     try:
         content = await fetch_url_content(pool, url, timeout=30)
@@ -126,7 +148,8 @@ async def list_search_engines(
     ctx: Context = None,
 ) -> str:
     """List available search engines."""
-    pool: BrowserPool = ctx.request_context.lifespan_context["pool"]
+    lazy_pool: LazyBrowserPool = ctx.request_context.lifespan_context["lazy_pool"]
+    pool = await lazy_pool.get()
     lines = [
         "# Available Search Engines",
         "",
@@ -160,10 +183,18 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
-    )
+    if args.transport == "stdio":
+        # stdio: log to file to avoid polluting stdout/stderr protocol channel
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+            filename="/tmp/web-search-mcp.log",
+        )
+    else:
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+        )
     mcp.run(transport=args.transport)
 
 
