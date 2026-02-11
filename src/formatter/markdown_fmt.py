@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 from src.api.schemas import SearchResponse, SearchResult
 
 

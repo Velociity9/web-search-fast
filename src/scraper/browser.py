@@ -5,9 +5,8 @@ import logging
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
-from playwright.async_api import Browser, Page
-
 from camoufox.async_api import AsyncCamoufox
+from playwright.async_api import Browser, Page
 
 logger = logging.getLogger(__name__)
 

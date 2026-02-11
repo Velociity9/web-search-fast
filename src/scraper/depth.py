@@ -1,10 +1,12 @@
 from __future__ import annotations
+
 import asyncio
+
 from playwright.async_api import Page
 
 from src.api.schemas import SearchResult, SubLink
 from src.scraper.browser import BrowserPool
-from src.scraper.parser import extract_main_content, extract_links
+from src.scraper.parser import extract_links, extract_main_content
 
 
 async def fetch_page_content(page: Page, url: str, timeout: int = 30) -> str:
