@@ -31,7 +31,7 @@ def _mock_ctx(started: bool = True) -> MagicMock:
 
 class TestWebSearchTool:
     @pytest.mark.asyncio
-    @patch("src.mcp_server.do_search", new_callable=AsyncMock)
+    @patch("src.core.search.do_search", new_callable=AsyncMock)
     async def test_returns_markdown(self, mock_search):
         mock_search.return_value = _make_response("hello")
         from src.mcp_server import web_search
@@ -51,7 +51,7 @@ class TestWebSearchTool:
         assert "invalid" in result
 
     @pytest.mark.asyncio
-    @patch("src.mcp_server.do_search", new_callable=AsyncMock)
+    @patch("src.core.search.do_search", new_callable=AsyncMock)
     async def test_clamps_depth(self, mock_search):
         mock_search.return_value = _make_response("test")
         from src.mcp_server import web_search
@@ -63,7 +63,7 @@ class TestWebSearchTool:
         assert req.depth == 3
 
     @pytest.mark.asyncio
-    @patch("src.mcp_server.do_search", new_callable=AsyncMock)
+    @patch("src.core.search.do_search", new_callable=AsyncMock)
     async def test_search_error_handled(self, mock_search):
         from src.core.search import SearchError
         mock_search.side_effect = SearchError("pool down")
@@ -76,7 +76,7 @@ class TestWebSearchTool:
 
 class TestGetPageContentTool:
     @pytest.mark.asyncio
-    @patch("src.mcp_server.fetch_url_content", new_callable=AsyncMock)
+    @patch("src.core.search.fetch_url_content", new_callable=AsyncMock)
     async def test_returns_content(self, mock_fetch):
         mock_fetch.return_value = "# Hello World\n\nSome content"
         from src.mcp_server import get_page_content
@@ -87,7 +87,7 @@ class TestGetPageContentTool:
         assert "Hello World" in result
 
     @pytest.mark.asyncio
-    @patch("src.mcp_server.fetch_url_content", new_callable=AsyncMock)
+    @patch("src.core.search.fetch_url_content", new_callable=AsyncMock)
     async def test_empty_content(self, mock_fetch):
         mock_fetch.return_value = ""
         from src.mcp_server import get_page_content

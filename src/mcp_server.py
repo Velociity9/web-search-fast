@@ -4,21 +4,18 @@ from __future__ import annotations
 import argparse
 import logging
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
+from typing import TYPE_CHECKING, AsyncIterator
 
 from mcp.server.fastmcp import Context, FastMCP
 
-from src.api.schemas import SearchRequest
-from src.config import SearchEngine, get_config
-from src.core.search import ENGINES, SearchError, do_search, fetch_url_content
-from src.formatter.markdown_fmt import format_markdown
-from src.scraper.browser import BrowserPool
+if TYPE_CHECKING:
+    from src.scraper.browser import BrowserPool
 
 logger = logging.getLogger(__name__)
 
 
 class LazyBrowserPool:
-    """Lazy-init wrapper: BrowserPool starts on first use, not at MCP handshake."""
+    """Lazy-init wrapper: BrowserPool starts on first tool call, not at MCP handshake."""
 
     def __init__(self) -> None:
         self._pool: BrowserPool | None = None
@@ -27,6 +24,9 @@ class LazyBrowserPool:
     async def get(self) -> BrowserPool:
         if self._pool is not None and self._started:
             return self._pool
+        from src.config import get_config
+        from src.scraper.browser import BrowserPool
+
         config = get_config()
         self._pool = BrowserPool(
             pool_size=config.browser.pool_size,
@@ -87,6 +87,11 @@ async def web_search(
     ctx: Context = None,
 ) -> str:
     """Search the web and return results as markdown."""
+    from src.api.schemas import SearchRequest
+    from src.config import SearchEngine
+    from src.core.search import SearchError, do_search
+    from src.formatter.markdown_fmt import format_markdown
+
     lazy_pool: LazyBrowserPool = ctx.request_context.lifespan_context["lazy_pool"]
     pool = await lazy_pool.get()
 
@@ -127,6 +132,8 @@ async def get_page_content(
     ctx: Context = None,
 ) -> str:
     """Fetch and extract content from a specific URL."""
+    from src.core.search import fetch_url_content
+
     lazy_pool: LazyBrowserPool = ctx.request_context.lifespan_context["lazy_pool"]
     pool = await lazy_pool.get()
 
@@ -148,6 +155,8 @@ async def list_search_engines(
     ctx: Context = None,
 ) -> str:
     """List available search engines."""
+    from src.core.search import ENGINES
+
     lazy_pool: LazyBrowserPool = ctx.request_context.lifespan_context["lazy_pool"]
     pool = await lazy_pool.get()
     lines = [
@@ -184,7 +193,6 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.transport == "stdio":
-        # stdio: log to file to avoid polluting stdout/stderr protocol channel
         logging.basicConfig(
             level=logging.INFO,
             format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
