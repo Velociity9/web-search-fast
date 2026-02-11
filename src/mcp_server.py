@@ -77,10 +77,14 @@ async def lifespan(server: FastMCP) -> AsyncIterator[dict]:
 mcp = FastMCP(
     "web-search-fast",
     instructions=(
-        "Web search service powered by Camoufox anti-detect browser. "
-        "Search Google, Bing, or DuckDuckGo and get structured results. "
-        "Supports multi-depth crawling: depth=1 for SERP snippets, "
-        "depth=2 to also fetch page content, depth=3 to also follow sub-links."
+        "Real-time web search and page reading service using a stealth browser. "
+        "Use this when you need CURRENT information that may be beyond your training data, including: "
+        "latest documentation, recent news/events, up-to-date API references, "
+        "package versions, changelogs, bug reports, security advisories, "
+        "pricing, availability, or any fact that changes over time. "
+        "Also use this to verify uncertain claims or find authoritative sources. "
+        "Prefer engine='duckduckgo' for speed and reliability. "
+        "Use depth=1 for quick lookups, depth=2 when you need full page content."
     ),
     lifespan=lifespan,
 )
@@ -94,15 +98,17 @@ mcp = FastMCP(
 @mcp.tool(
     name="web_search",
     description=(
-        "Search the web using Google, Bing, or DuckDuckGo. "
-        "Returns search results with titles, URLs, and snippets in markdown. "
-        "Use depth=2 to also fetch full page content for each result. "
-        "Use depth=3 to additionally follow and fetch sub-links from each page."
+        "Search the web for current information. Use this when you need to find "
+        "up-to-date facts, documentation, tutorials, news, package info, error solutions, "
+        "or anything that may have changed after your training cutoff. "
+        "Returns titles, URLs, and snippets in markdown. "
+        "Set depth=2 to also fetch full page content for each result (slower but more detailed). "
+        "Prefer engine='duckduckgo' for speed; use 'google' for broader coverage."
     ),
 )
 async def web_search(
     query: str,
-    engine: str = "google",
+    engine: str = "duckduckgo",
     depth: int = 1,
     max_results: int = 5,
     ctx: Context = None,
@@ -152,8 +158,10 @@ async def web_search(
 @mcp.tool(
     name="get_page_content",
     description=(
-        "Fetch a single web page and extract its main content as markdown. "
-        "Useful for reading a specific URL in detail after seeing it in search results."
+        "Fetch and read a single web page, extracting its main content as clean markdown. "
+        "Use this to read full articles, documentation pages, blog posts, or any URL "
+        "you already know. Ideal after web_search when you need the complete content "
+        "of a specific result, or when the user provides a URL to read."
     ),
 )
 async def get_page_content(
@@ -177,7 +185,7 @@ async def get_page_content(
 
 @mcp.tool(
     name="list_search_engines",
-    description="List available search engines and browser pool status.",
+    description="List available search engines and check browser pool health status.",
 )
 async def list_search_engines(
     ctx: Context = None,
