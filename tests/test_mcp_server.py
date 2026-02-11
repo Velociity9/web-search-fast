@@ -23,9 +23,7 @@ def _mock_ctx(started: bool = True) -> MagicMock:
     pool = MagicMock()
     pool._started = started
     pool._pool_size = 5
-    lazy_pool = AsyncMock()
-    lazy_pool.get.return_value = pool
-    ctx.request_context.lifespan_context = {"lazy_pool": lazy_pool}
+    ctx.request_context.lifespan_context = {"pool": pool}
     return ctx
 
 
@@ -108,3 +106,26 @@ class TestListSearchEnginesTool:
         assert "bing" in result
         assert "duckduckgo" in result
         assert "Pool size" in result
+
+
+class TestPoolSingleton:
+    def test_initial_state(self):
+        import src.mcp_server as m
+        # _pool_started should be bool
+        assert isinstance(m._pool_started, bool)
+
+    @pytest.mark.asyncio
+    async def test_ensure_pool_creates_instance(self):
+        """_ensure_pool creates a pool when none exists."""
+        import src.mcp_server as m
+        original_instance = m._pool_instance
+        original_started = m._pool_started
+        try:
+            m._pool_instance = MagicMock()
+            m._pool_instance.start = AsyncMock()
+            m._pool_started = True
+            pool = await m._ensure_pool()
+            assert pool is m._pool_instance
+        finally:
+            m._pool_instance = original_instance
+            m._pool_started = original_started

@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import logging
+import signal
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, AsyncIterator
 
@@ -13,49 +15,56 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Singleton browser pool — shared across all SSE sessions
+# ---------------------------------------------------------------------------
 
-class LazyBrowserPool:
-    """Lazy-init wrapper: BrowserPool starts on first tool call, not at MCP handshake."""
+_pool_instance: BrowserPool | None = None
+_pool_started: bool = False
 
-    def __init__(self) -> None:
-        self._pool: BrowserPool | None = None
-        self._started = False
 
-    async def get(self) -> BrowserPool:
-        if self._pool is not None and self._started:
-            return self._pool
-        from src.config import get_config
-        from src.scraper.browser import BrowserPool
+async def _ensure_pool() -> BrowserPool:
+    """Return the global BrowserPool, starting it on first call."""
+    global _pool_instance, _pool_started
+    if _pool_instance is not None and _pool_started:
+        return _pool_instance
+    from src.config import get_config
+    from src.scraper.browser import BrowserPool
 
-        config = get_config()
-        self._pool = BrowserPool(
-            pool_size=config.browser.pool_size,
-            headless=config.browser.headless,
-            geoip=config.browser.geoip,
-            humanize=config.browser.humanize,
-            locale=config.browser.locale,
-            block_images=config.browser.block_images,
-        )
-        await self._pool.start()
-        self._started = True
-        logger.info("MCP server: BrowserPool started (size=%d)", config.browser.pool_size)
-        return self._pool
+    config = get_config()
+    _pool_instance = BrowserPool(
+        pool_size=config.browser.pool_size,
+        headless=config.browser.headless,
+        geoip=config.browser.geoip,
+        humanize=config.browser.humanize,
+        locale=config.browser.locale,
+        block_images=config.browser.block_images,
+    )
+    await _pool_instance.start()
+    _pool_started = True
+    logger.info("BrowserPool ready (size=%d)", config.browser.pool_size)
+    return _pool_instance
 
-    async def stop(self) -> None:
-        if self._pool and self._started:
-            await self._pool.stop()
-            self._started = False
-            logger.info("MCP server: BrowserPool stopped")
+
+async def _shutdown_pool() -> None:
+    """Stop the global BrowserPool."""
+    global _pool_instance, _pool_started
+    if _pool_instance and _pool_started:
+        await _pool_instance.stop()
+        _pool_started = False
+        logger.info("BrowserPool stopped")
+
+
+# ---------------------------------------------------------------------------
+# Lifespan — per-session, but pool is singleton so startup is instant
+# ---------------------------------------------------------------------------
 
 
 @asynccontextmanager
 async def lifespan(server: FastMCP) -> AsyncIterator[dict]:
-    """Manage lazy BrowserPool lifecycle for MCP server."""
-    lazy_pool = LazyBrowserPool()
-    try:
-        yield {"lazy_pool": lazy_pool}
-    finally:
-        await lazy_pool.stop()
+    """Each MCP session gets a ref to the shared pool."""
+    pool = await _ensure_pool()
+    yield {"pool": pool}
 
 
 mcp = FastMCP(
@@ -68,6 +77,11 @@ mcp = FastMCP(
     ),
     lifespan=lifespan,
 )
+
+
+# ---------------------------------------------------------------------------
+# MCP Tools
+# ---------------------------------------------------------------------------
 
 
 @mcp.tool(
@@ -92,8 +106,7 @@ async def web_search(
     from src.core.search import SearchError, do_search
     from src.formatter.markdown_fmt import format_markdown
 
-    lazy_pool: LazyBrowserPool = ctx.request_context.lifespan_context["lazy_pool"]
-    pool = await lazy_pool.get()
+    pool: BrowserPool = ctx.request_context.lifespan_context["pool"]
 
     try:
         search_engine = SearchEngine(engine.lower())
@@ -134,8 +147,7 @@ async def get_page_content(
     """Fetch and extract content from a specific URL."""
     from src.core.search import fetch_url_content
 
-    lazy_pool: LazyBrowserPool = ctx.request_context.lifespan_context["lazy_pool"]
-    pool = await lazy_pool.get()
+    pool: BrowserPool = ctx.request_context.lifespan_context["pool"]
 
     try:
         content = await fetch_url_content(pool, url, timeout=30)
@@ -157,8 +169,7 @@ async def list_search_engines(
     """List available search engines."""
     from src.core.search import ENGINES
 
-    lazy_pool: LazyBrowserPool = ctx.request_context.lifespan_context["lazy_pool"]
-    pool = await lazy_pool.get()
+    pool: BrowserPool = ctx.request_context.lifespan_context["pool"]
     lines = [
         "# Available Search Engines",
         "",
@@ -181,15 +192,22 @@ async def list_search_engines(
     return "\n".join(lines)
 
 
+# ---------------------------------------------------------------------------
+# CLI entry point
+# ---------------------------------------------------------------------------
+
+
 def main() -> None:
     """CLI entry point for the MCP server."""
     parser = argparse.ArgumentParser(description="Web Search MCP Server")
     parser.add_argument(
         "--transport",
         choices=["stdio", "sse"],
-        default="stdio",
-        help="Transport protocol (default: stdio)",
+        default="sse",
+        help="Transport protocol (default: sse)",
     )
+    parser.add_argument("--host", default="127.0.0.1", help="SSE bind host (default: 127.0.0.1)")
+    parser.add_argument("--port", type=int, default=8897, help="SSE bind port (default: 8897)")
     args = parser.parse_args()
 
     if args.transport == "stdio":
@@ -203,7 +221,36 @@ def main() -> None:
             level=logging.INFO,
             format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
         )
-    mcp.run(transport=args.transport)
+
+    if args.transport == "sse":
+        # SSE: pre-warm browser pool before accepting connections
+        mcp.settings.host = args.host
+        mcp.settings.port = args.port
+
+        import uvicorn
+
+        starlette_app = mcp.sse_app()
+
+        async def serve() -> None:
+            await _ensure_pool()
+            logger.info("SSE server starting on %s:%d", args.host, args.port)
+            config = uvicorn.Config(starlette_app, host=args.host, port=args.port, log_level="info")
+            server = uvicorn.Server(config)
+            loop = asyncio.get_event_loop()
+            loop.add_signal_handler(signal.SIGTERM, lambda: asyncio.ensure_future(_shutdown_and_exit(server)))
+            loop.add_signal_handler(signal.SIGINT, lambda: asyncio.ensure_future(_shutdown_and_exit(server)))
+            try:
+                await server.serve()
+            finally:
+                await _shutdown_pool()
+
+        async def _shutdown_and_exit(server: uvicorn.Server) -> None:
+            await _shutdown_pool()
+            server.should_exit = True
+
+        asyncio.run(serve())
+    else:
+        mcp.run(transport="stdio")
 
 
 if __name__ == "__main__":
