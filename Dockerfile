@@ -1,17 +1,50 @@
-# ---- Build stage ----
+# ---- Nuitka build stage ----
 FROM python:3.11-slim AS builder
 
 WORKDIR /app
 
-# System deps for building wheels
+# Build tools for Nuitka compilation
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc g++ && \
-    rm -rf /var/lib/apt/lists/*
+    gcc g++ patchelf ccache \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml ./
 COPY src/ ./src/
 
-RUN pip install --no-cache-dir -e .
+# Install deps + Nuitka, then compile
+RUN pip install --no-cache-dir -e . nuitka ordered-set && \
+    python -m nuitka \
+        --standalone \
+        --output-dir=/build \
+        --output-filename=web-search-mcp \
+        --follow-imports \
+        --include-package=src \
+        --include-package=mcp \
+        --include-package=starlette \
+        --include-package=uvicorn \
+        --include-package=fastapi \
+        --include-package=pydantic \
+        --include-package=pydantic_core \
+        --include-package=httpx \
+        --include-package=httpcore \
+        --include-package=anyio \
+        --include-package=bs4 \
+        --include-package=lxml \
+        --include-package=markdownify \
+        --include-package=camoufox \
+        --include-package=playwright \
+        --include-package=certifi \
+        --include-package=h11 \
+        --include-package=sniffio \
+        --include-package=idna \
+        --include-package=typing_extensions \
+        --nofollow-import-to=pytest \
+        --nofollow-import-to=setuptools \
+        --nofollow-import-to=pip \
+        --enable-plugin=anti-bloat \
+        --prefer-source-code \
+        --python-flag=-O \
+        src/mcp_server.py
 
 # ---- Runtime stage ----
 FROM python:3.11-slim
@@ -20,7 +53,6 @@ WORKDIR /app
 
 # Camoufox (Firefox-based) runtime dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    # Firefox/Camoufox runtime libs
     libgtk-3-0 \
     libdbus-glib-1-2 \
     libxt6 \
@@ -39,26 +71,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libnss3 \
     libxshmfence1 \
     libxkbcommon0 \
-    # Fonts
     fonts-liberation \
     fonts-noto-cjk \
-    # Misc
     ca-certificates \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy installed packages from builder
-COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
-COPY --from=builder /usr/local/bin /usr/local/bin
+# Copy Nuitka compiled binary
+COPY --from=builder /build/mcp_server.dist/ /app/bin/
 
-COPY pyproject.toml ./
-COPY src/ ./src/
-
-# Install in editable mode (for entry point) + fetch Camoufox browser binary
-RUN pip install --no-cache-dir -e . && \
+# Fetch Camoufox browser binary (needs pip camoufox for the fetch command)
+RUN pip install --no-cache-dir "camoufox[geoip]>=0.4.11" && \
     python -m camoufox fetch
 
-# Default env (token passed at runtime via -e or docker-compose)
 ENV MCP_HOST="0.0.0.0" \
     MCP_PORT="8897" \
     MCP_TRANSPORT="http" \
@@ -70,5 +95,5 @@ EXPOSE 8897
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
     CMD curl -sf -o /dev/null -w "%{http_code}" -X POST http://localhost:8897/mcp -m 3 || exit 1
 
-ENTRYPOINT ["python", "-m", "src.mcp_server"]
+ENTRYPOINT ["/app/bin/web-search-mcp"]
 CMD ["--transport", "http", "--host", "0.0.0.0", "--port", "8897"]

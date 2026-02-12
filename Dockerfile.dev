@@ -1,0 +1,51 @@
+# Lightweight Dockerfile without Nuitka (faster build, for development)
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Camoufox (Firefox-based) runtime dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc g++ \
+    libgtk-3-0 \
+    libdbus-glib-1-2 \
+    libxt6 \
+    libx11-xcb1 \
+    libasound2 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxrandr2 \
+    libpango-1.0-0 \
+    libatk1.0-0 \
+    libatk-bridge2.0-0 \
+    libcups2 \
+    libdrm2 \
+    libgbm1 \
+    libnspr4 \
+    libnss3 \
+    libxshmfence1 \
+    libxkbcommon0 \
+    fonts-liberation \
+    fonts-noto-cjk \
+    ca-certificates \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY pyproject.toml ./
+COPY src/ ./src/
+
+RUN pip install --no-cache-dir -e . && \
+    python -m camoufox fetch
+
+ENV MCP_HOST="0.0.0.0" \
+    MCP_PORT="8897" \
+    MCP_TRANSPORT="http" \
+    BROWSER_POOL_SIZE="3" \
+    PYTHONUNBUFFERED="1"
+
+EXPOSE 8897
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD curl -sf -o /dev/null -w "%{http_code}" -X POST http://localhost:8897/mcp -m 3 || exit 1
+
+ENTRYPOINT ["python", "-m", "src.mcp_server"]
+CMD ["--transport", "http", "--host", "0.0.0.0", "--port", "8897"]
