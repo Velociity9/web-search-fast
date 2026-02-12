@@ -113,21 +113,51 @@ restart() {
     start
 }
 
+# --- Register Docker HTTP mode ---
+docker_register() {
+    local DOCKER_HOST="${DOCKER_MCP_HOST:-127.0.0.1}"
+    local DOCKER_PORT="${DOCKER_MCP_PORT:-8897}"
+    local AUTH_VAL="${MCP_AUTH_TOKEN:-}"
+    local MCP_URL="http://${DOCKER_HOST}:${DOCKER_PORT}/mcp"
+
+    claude mcp remove "$MCP_NAME" -s "$SCOPE" 2>/dev/null || true
+
+    if [ -n "$AUTH_VAL" ]; then
+        claude mcp add-json -s "$SCOPE" "$MCP_NAME" "$(cat <<ENDJSON
+{
+  "type": "http",
+  "url": "$MCP_URL",
+  "headers": {"Authorization": "Bearer $AUTH_VAL"}
+}
+ENDJSON
+)"
+        echo "Registered $MCP_NAME (http+auth, scope=$SCOPE)"
+    else
+        claude mcp add -s "$SCOPE" -t http "$MCP_NAME" "$MCP_URL" 2>/dev/null
+        echo "Registered $MCP_NAME (http, no auth, scope=$SCOPE)"
+    fi
+    echo "  url: $MCP_URL"
+    echo ""
+    echo "Restart Claude Code session to activate."
+}
+
 case "${1:-register}" in
-    register)   register   ;;
-    unregister) unregister ;;
-    start)      start      ;;
-    stop)       stop       ;;
-    status)     status     ;;
-    restart)    restart    ;;
+    register)        register        ;;
+    unregister)      unregister      ;;
+    start)           start           ;;
+    stop)            stop            ;;
+    status)          status          ;;
+    restart)         restart         ;;
+    docker-register) docker_register ;;
     *)
-        echo "Usage: $0 {register|unregister|start|stop|status|restart}"
+        echo "Usage: $0 {register|unregister|start|stop|status|restart|docker-register}"
         echo ""
-        echo "  register    Register stdio MCP to Claude Code (recommended)"
-        echo "  unregister  Remove MCP from Claude Code"
-        echo "  start       Start HTTP background server + register"
-        echo "  stop        Stop HTTP background server"
-        echo "  status      Show registration and server status"
-        echo "  restart     Restart HTTP background server"
+        echo "  register         Register stdio MCP to Claude Code (recommended)"
+        echo "  unregister       Remove MCP from Claude Code"
+        echo "  start            Start HTTP background server + register"
+        echo "  stop             Stop HTTP background server"
+        echo "  status           Show registration and server status"
+        echo "  restart          Restart HTTP background server"
+        echo "  docker-register  Register Docker HTTP MCP (set MCP_AUTH_TOKEN for auth)"
         ;;
 esac

@@ -252,6 +252,8 @@ def main() -> None:
 
         import uvicorn
 
+        from src.auth import TokenAuthMiddleware, is_auth_enabled
+
         if args.transport == "http":
             starlette_app = mcp.streamable_http_app()
             endpoint_path = "/mcp"
@@ -259,9 +261,13 @@ def main() -> None:
             starlette_app = mcp.sse_app()
             endpoint_path = "/sse"
 
+        # Wrap with token auth when MCP_AUTH_TOKEN is set
+        starlette_app.add_middleware(TokenAuthMiddleware)
+
         async def serve() -> None:
             await _ensure_pool()
-            logger.info("%s server starting on %s:%d", args.transport.upper(), args.host, args.port)
+            auth_status = "enabled" if is_auth_enabled() else "disabled (no MCP_AUTH_TOKEN)"
+            logger.info("%s server starting on %s:%d (auth: %s)", args.transport.upper(), args.host, args.port, auth_status)
             config = uvicorn.Config(starlette_app, host=args.host, port=args.port, log_level="info")
             server = uvicorn.Server(config)
             loop = asyncio.get_event_loop()

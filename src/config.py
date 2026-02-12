@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from enum import Enum
 
 from pydantic import BaseModel, Field
@@ -35,4 +36,8 @@ class AppConfig(BaseModel):
 
 
 def get_config() -> AppConfig:
-    return AppConfig()
+    """Build config, applying env var overrides."""
+    browser_kwargs: dict = {}
+    if pool_size := os.environ.get("BROWSER_POOL_SIZE"):
+        browser_kwargs["pool_size"] = int(pool_size)
+    return AppConfig(browser=BrowserConfig(**browser_kwargs))
