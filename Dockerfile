@@ -1,3 +1,11 @@
+# ---- Node.js build stage for admin UI ----
+FROM node:20-alpine AS ui-builder
+WORKDIR /ui
+COPY admin-ui/package*.json ./
+RUN npm ci 2>/dev/null || echo "No admin-ui package.json, skipping"
+COPY admin-ui/ ./
+RUN if [ -f package.json ]; then npx vite build --outDir dist; else mkdir -p dist; fi
+
 # ---- Nuitka build stage ----
 FROM python:3.11-slim AS builder
 
@@ -10,6 +18,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY pyproject.toml ./
 COPY src/ ./src/
+
+# Copy admin UI build output if available
+COPY --from=ui-builder /ui/dist/ ./src/admin/static/
 
 # Install deps + Nuitka, then compile
 RUN pip install --no-cache-dir -e . nuitka ordered-set && \
@@ -38,6 +49,8 @@ RUN pip install --no-cache-dir -e . nuitka ordered-set && \
         --include-package=sniffio \
         --include-package=idna \
         --include-package=typing_extensions \
+        --include-package=aiosqlite \
+        --include-package=redis \
         --nofollow-import-to=pytest \
         --nofollow-import-to=setuptools \
         --nofollow-import-to=pip \
@@ -93,7 +106,7 @@ ENV MCP_HOST="0.0.0.0" \
 EXPOSE 8897
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-    CMD curl -sf -o /dev/null -w "%{http_code}" -X POST http://localhost:8897/mcp -m 3 || exit 1
+    CMD curl -sf http://localhost:${MCP_PORT}/health -m 3 || exit 1
 
 ENTRYPOINT ["/app/bin/web-search-mcp"]
 CMD ["--transport", "http", "--host", "0.0.0.0", "--port", "8897"]

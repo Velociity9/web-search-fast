@@ -58,7 +58,11 @@ class BingSearchEngine(BaseSearchEngine):
 
         elements = await page.query_selector_all("li.b_algo")
         if not elements:
+            # Fallback selectors
+            elements = await page.query_selector_all("#b_results li.b_algo")
+        if not elements:
             logger.warning("No Bing result elements found on page")
+            await self._dump_page_diagnostics(page)
             return results
 
         for element in elements:

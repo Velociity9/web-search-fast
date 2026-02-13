@@ -1,6 +1,7 @@
 """Core search logic — framework-agnostic, used by both FastAPI and MCP server."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from datetime import datetime, timezone
@@ -45,41 +46,54 @@ async def do_search(pool: BrowserPool, req: SearchRequest) -> SearchResponse:
         raise SearchError("Browser pool not initialized")
 
     start = time.monotonic()
-    used_engine = req.engine
+    total_timeout = req.timeout or 25
 
-    async with pool.acquire() as page:
-        engine = ENGINES[req.engine]
-        results = await engine.search(page, req.query, req.max_results)
+    async def _inner() -> SearchResponse:
+        used_engine = req.engine
 
-        if not results:
-            for fallback in FALLBACK_ORDER.get(req.engine, []):
-                logger.info(
-                    "Engine %s returned 0 results, falling back to %s",
-                    req.engine.value,
-                    fallback.value,
-                )
-                fb_engine = ENGINES[fallback]
-                results = await fb_engine.search(page, req.query, req.max_results)
-                if results:
-                    used_engine = fallback
-                    break
+        async with pool.acquire() as page:
+            engine = ENGINES[req.engine]
+            results = await engine.search(page, req.query, req.max_results)
 
-    results = await crawl_results(pool, results, depth=req.depth, timeout=req.timeout)
-    elapsed = int((time.monotonic() - start) * 1000)
+            if not results:
+                for fallback in FALLBACK_ORDER.get(req.engine, []):
+                    logger.info(
+                        "Engine %s returned 0 results, falling back to %s",
+                        req.engine.value,
+                        fallback.value,
+                    )
+                    fb_engine = ENGINES[fallback]
+                    results = await fb_engine.search(page, req.query, req.max_results)
+                    if results:
+                        used_engine = fallback
+                        break
 
-    return SearchResponse(
-        query=req.query,
-        engine=used_engine,
-        depth=req.depth,
-        total=len(results),
-        results=results,
-        metadata=SearchMetadata(
-            elapsed_ms=elapsed,
-            timestamp=datetime.now(timezone.utc).isoformat(),
+        # Depth crawling with remaining time budget
+        elapsed_so_far = time.monotonic() - start
+        remaining = max(5, total_timeout - elapsed_so_far)
+        results = await crawl_results(pool, results, depth=req.depth, timeout=int(remaining))
+        elapsed = int((time.monotonic() - start) * 1000)
+
+        return SearchResponse(
+            query=req.query,
             engine=used_engine,
             depth=req.depth,
-        ),
-    )
+            total=len(results),
+            results=results,
+            metadata=SearchMetadata(
+                elapsed_ms=elapsed,
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                engine=used_engine,
+                depth=req.depth,
+            ),
+        )
+
+    try:
+        return await asyncio.wait_for(_inner(), timeout=total_timeout)
+    except asyncio.TimeoutError:
+        elapsed = int((time.monotonic() - start) * 1000)
+        logger.warning("do_search timed out after %dms (limit=%ds)", elapsed, total_timeout)
+        raise SearchError(f"Search timed out after {total_timeout}s")
 
 
 async def fetch_url_content(pool: BrowserPool, url: str, timeout: int = 30) -> str:

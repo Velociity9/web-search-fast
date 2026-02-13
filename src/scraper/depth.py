@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 from playwright.async_api import Page
 
@@ -8,13 +9,24 @@ from src.api.schemas import SearchResult, SubLink
 from src.scraper.browser import BrowserPool
 from src.scraper.parser import extract_links, extract_main_content
 
+logger = logging.getLogger(__name__)
 
-async def fetch_page_content(page: Page, url: str, timeout: int = 30) -> str:
-    """Fetch a single page and return its HTML content."""
+
+async def fetch_page_content(page: Page, url: str, timeout: int = 15) -> str:
+    """Fetch a single page and return its HTML content.
+
+    Uses 'domcontentloaded' for speed — most content is available without
+    waiting for all resources to load.
+    """
     try:
-        await page.goto(url, wait_until="domcontentloaded", timeout=timeout * 1000)
+        await page.goto(url, wait_until="domcontentloaded", timeout=min(timeout, 12) * 1000)
+    except Exception as exc:
+        logger.warning("fetch_page_content failed for %s: %s", url, exc)
+        return ""
+    try:
         return await page.content()
-    except Exception:
+    except Exception as exc:
+        logger.warning("page.content() failed for %s: %s", url, exc)
         return ""
 
 

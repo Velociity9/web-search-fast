@@ -178,6 +178,156 @@ curl -X POST http://localhost:8000/search \
 
 > Google 被拦截时会自动按 DuckDuckGo → Bing 顺序回退，响应中的 `engine` 字段标识实际使用的引擎。
 
+## MCP 模式使用（curl 调用示例）
+
+MCP 服务默认监听 `http://127.0.0.1:8897`，使用 Streamable HTTP 传输协议。
+
+### 启动 MCP 服务
+
+```bash
+# 本地启动（HTTP 模式）
+python -m src.mcp_server --transport http --host 127.0.0.1 --port 8897
+
+# Docker 启动
+docker compose up -d
+```
+
+### 初始化 MCP 会话
+
+```bash
+# 发送 initialize 请求
+curl -s -X POST http://127.0.0.1:8897/mcp \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "initialize",
+    "params": {
+      "protocolVersion": "2025-03-26",
+      "capabilities": {},
+      "clientInfo": {"name": "curl-demo", "version": "1.0"}
+    }
+  }' | jq .
+```
+
+### 调用 web_search 工具
+
+```bash
+# 搜索（depth=1，快速 SERP 结果）
+curl -s -X POST http://127.0.0.1:8897/mcp \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "tools/call",
+    "params": {
+      "name": "web_search",
+      "arguments": {
+        "query": "firsh.me",
+        "engine": "duckduckgo",
+        "max_results": 5,
+        "depth": 1
+      }
+    }
+  }' | jq .
+
+# 搜索（depth=2，包含页面正文内容）
+curl -s -X POST http://127.0.0.1:8897/mcp \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "tools/call",
+    "params": {
+      "name": "web_search",
+      "arguments": {
+        "query": "python asyncio tutorial",
+        "engine": "google",
+        "max_results": 3,
+        "depth": 2
+      }
+    }
+  }' | jq .
+```
+
+### 调用 get_page_content 工具
+
+```bash
+# 获取单个页面内容
+curl -s -X POST http://127.0.0.1:8897/mcp \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 4,
+    "method": "tools/call",
+    "params": {
+      "name": "get_page_content",
+      "arguments": {
+        "url": "https://firsh.me/"
+      }
+    }
+  }' | jq .
+```
+
+### 列出可用搜索引擎
+
+```bash
+curl -s -X POST http://127.0.0.1:8897/mcp \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 5,
+    "method": "tools/call",
+    "params": {
+      "name": "list_search_engines",
+      "arguments": {}
+    }
+  }' | jq .
+```
+
+### 带 API Key 认证
+
+```bash
+# 如果配置了 API Key 认证，在请求头中添加 Authorization
+curl -s -X POST http://127.0.0.1:8897/mcp \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -H 'Authorization: Bearer YOUR_API_KEY' \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "tools/call",
+    "params": {
+      "name": "web_search",
+      "arguments": {"query": "hello world", "engine": "duckduckgo"}
+    }
+  }' | jq .
+```
+
+## Camoufox 指纹浏览器配置
+
+通过环境变量配置 Camoufox 高级功能：
+
+| 环境变量 | 说明 | 示例 |
+|----------|------|------|
+| `BROWSER_POOL_SIZE` | 浏览器并发数 | `5` |
+| `BROWSER_PROXY` | 代理服务器 | `socks5://127.0.0.1:1080` |
+| `BROWSER_OS` | 目标 OS 指纹 | `windows` / `macos` / `linux` |
+| `BROWSER_FONTS` | 自定义字体列表 | `Arial,Helvetica,Times New Roman` |
+| `BROWSER_BLOCK_WEBGL` | 阻止 WebGL 指纹 | `true` |
+| `BROWSER_ADDONS` | Firefox 插件路径 | `/path/to/addon1.xpi,/path/to/addon2.xpi` |
+
+内置功能（默认启用）：
+- **GeoIP 伪装** — 基于真实 IP 自动匹配地理位置指纹
+- **人性化操作** — 模拟真实鼠标移动和点击行为
+- **图片阻止** — 加速页面加载
+- **Locale 匹配** — 浏览器语言与地区一致
+
 ## 测试
 
 ```bash

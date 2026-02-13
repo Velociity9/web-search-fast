@@ -141,6 +141,21 @@ ENDJSON
     echo "Restart Claude Code session to activate."
 }
 
+# --- Update (unregister + re-register) ---
+update() {
+    echo "Updating $MCP_NAME in Claude Code ..."
+    unregister
+    register
+    echo "Done. Restart Claude Code session to activate."
+}
+
+docker_update() {
+    echo "Updating $MCP_NAME (Docker) in Claude Code ..."
+    unregister
+    docker_register
+    echo "Done. Restart Claude Code session to activate."
+}
+
 case "${1:-register}" in
     register)        register        ;;
     unregister)      unregister      ;;
@@ -148,9 +163,11 @@ case "${1:-register}" in
     stop)            stop            ;;
     status)          status          ;;
     restart)         restart         ;;
+    update)          update          ;;
     docker-register) docker_register ;;
+    docker-update)   docker_update   ;;
     *)
-        echo "Usage: $0 {register|unregister|start|stop|status|restart|docker-register}"
+        echo "Usage: $0 {register|unregister|start|stop|status|restart|update|docker-register|docker-update}"
         echo ""
         echo "  register         Register stdio MCP to Claude Code (recommended)"
         echo "  unregister       Remove MCP from Claude Code"
@@ -158,6 +175,8 @@ case "${1:-register}" in
         echo "  stop             Stop HTTP background server"
         echo "  status           Show registration and server status"
         echo "  restart          Restart HTTP background server"
+        echo "  update           Unregister + re-register stdio MCP"
         echo "  docker-register  Register Docker HTTP MCP (set MCP_AUTH_TOKEN for auth)"
+        echo "  docker-update    Unregister + re-register Docker HTTP MCP"
         ;;
 esac

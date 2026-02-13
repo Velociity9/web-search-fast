@@ -21,3 +21,7 @@ htmlcov/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+data/
+src/admin/static/
+admin-ui/node_modules/
+admin-ui/dist/

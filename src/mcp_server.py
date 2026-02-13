@@ -4,7 +4,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
-import signal
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, AsyncIterator
 
@@ -43,6 +42,11 @@ async def _ensure_pool() -> BrowserPool:
         humanize=config.browser.humanize,
         locale=config.browser.locale,
         block_images=config.browser.block_images,
+        proxy=config.browser.proxy,
+        os_target=config.browser.os_target,
+        fonts=config.browser.fonts,
+        block_webgl=config.browser.block_webgl,
+        addons=config.browser.addons,
     )
     await _pool_instance.start()
     _pool_started = True
@@ -114,6 +118,7 @@ async def web_search(
     ctx: Context = None,
 ) -> str:
     """Search the web and return results as markdown."""
+    import json as _json
     import time as _t
     t0 = _t.monotonic()
     logger.info("[web_search] called: query=%r engine=%s depth=%d max_results=%d", query, engine, depth, max_results)
@@ -121,6 +126,7 @@ async def web_search(
     from src.api.schemas import SearchRequest
     from src.config import SearchEngine
     from src.core.search import SearchError, do_search
+    from src.formatter.json_fmt import format_json
     from src.formatter.markdown_fmt import format_markdown
 
     pool: BrowserPool = ctx.request_context.lifespan_context["pool"]
@@ -140,7 +146,7 @@ async def web_search(
             engine=search_engine,
             depth=depth,
             max_results=max_results,
-            timeout=60,
+            timeout=25,
         )
         logger.info("[web_search] starting search ...")
         response = await do_search(pool, req)
@@ -169,17 +175,24 @@ async def get_page_content(
     ctx: Context = None,
 ) -> str:
     """Fetch and extract content from a specific URL."""
+    import time as _t
+    t0 = _t.monotonic()
+    logger.info("[get_page_content] called: url=%r", url)
+
     from src.core.search import fetch_url_content
 
     pool: BrowserPool = ctx.request_context.lifespan_context["pool"]
 
     try:
-        content = await fetch_url_content(pool, url, timeout=30)
+        content = await fetch_url_content(pool, url, timeout=20)
+        elapsed = (_t.monotonic() - t0) * 1000
         if not content:
+            logger.warning("[get_page_content] empty content from %s (%.0fms)", url, elapsed)
             return f"Could not extract content from {url}"
+        logger.info("[get_page_content] done in %.0fms, %d chars", elapsed, len(content))
         return f"# Content from {url}\n\n{content}"
     except Exception as e:
-        logger.exception("Error fetching page content")
+        logger.exception("[get_page_content] error fetching %s", url)
         return f"Error fetching {url}: {e}"
 
 
@@ -250,37 +263,94 @@ def main() -> None:
         mcp.settings.host = args.host
         mcp.settings.port = args.port
 
-        import uvicorn
+        import os
 
-        from src.auth import TokenAuthMiddleware, is_auth_enabled
+        import uvicorn
+        from starlette.routing import Mount
+        from starlette.staticfiles import StaticFiles
+
+        from src.admin.database import close_db, init_db
+        from src.admin.routes import admin_routes
+        from src.config import get_admin_config
+        from src.middleware.api_key_auth import APIKeyAuthMiddleware
+        from src.middleware.ip_ban import IPBanMiddleware
+        from src.middleware.search_log import SearchLogMiddleware
+
+        admin_cfg = get_admin_config()
 
         if args.transport == "http":
-            starlette_app = mcp.streamable_http_app()
-            endpoint_path = "/mcp"
+            app = mcp.streamable_http_app()
         else:
-            starlette_app = mcp.sse_app()
-            endpoint_path = "/sse"
+            app = mcp.sse_app()
 
-        # Wrap with token auth when MCP_AUTH_TOKEN is set
-        starlette_app.add_middleware(TokenAuthMiddleware)
+        # Wrap the MCP app's lifespan to also init admin DB + browser pool
+        _original_lifespan = app.router.lifespan_context
 
-        async def serve() -> None:
+        @asynccontextmanager
+        async def _combined_lifespan(a):
+            await init_db(admin_cfg.db_path)
+            from src.admin.repository import init_redis
+            await init_redis(admin_cfg.redis_url or None)
             await _ensure_pool()
-            auth_status = "enabled" if is_auth_enabled() else "disabled (no MCP_AUTH_TOKEN)"
-            logger.info("%s server starting on %s:%d (auth: %s)", args.transport.upper(), args.host, args.port, auth_status)
-            config = uvicorn.Config(starlette_app, host=args.host, port=args.port, log_level="info")
-            server = uvicorn.Server(config)
-            loop = asyncio.get_event_loop()
-            loop.add_signal_handler(signal.SIGTERM, lambda: asyncio.ensure_future(_shutdown_and_exit(server)))
-            loop.add_signal_handler(signal.SIGINT, lambda: asyncio.ensure_future(_shutdown_and_exit(server)))
+            logger.info(
+                "%s server starting on %s:%d (admin: %s)",
+                args.transport.upper(), args.host, args.port,
+                "enabled" if admin_cfg.admin_token else "open",
+            )
             try:
-                await server.serve()
+                async with _original_lifespan(a) as state:
+                    yield state
             finally:
                 await _shutdown_pool()
+                await close_db()
 
-        async def _shutdown_and_exit(server: uvicorn.Server) -> None:
-            await _shutdown_pool()
-            server.should_exit = True
+        app.router.lifespan_context = _combined_lifespan
+
+        # Health check endpoint (no auth required)
+        from starlette.responses import JSONResponse as _JSONResponse
+        from starlette.routing import Route as _Route
+
+        async def _health(request):
+            return _JSONResponse({"status": "ok"})
+
+        app.routes.insert(0, _Route("/health", _health))
+
+        # Add admin routes before MCP routes
+        for route in reversed(admin_routes):
+            app.routes.insert(0, route)
+
+        # Serve admin SPA static files if built (after API routes, before MCP catch-all)
+        static_dir = os.path.join(os.path.dirname(__file__), "admin", "static")
+        if os.path.isdir(static_dir):
+            from starlette.responses import FileResponse
+            from starlette.routing import Route
+
+            index_html = os.path.join(static_dir, "index.html")
+
+            async def spa_fallback(request):
+                """Serve index.html for all /admin/* paths (SPA client-side routing).
+                Skip /admin/api/* — those are handled by API routes.
+                """
+                if request.url.path.startswith("/admin/api/"):
+                    from starlette.responses import JSONResponse
+                    return JSONResponse({"error": "Not found"}, status_code=404)
+                return FileResponse(index_html)
+
+            # Static assets first (JS, CSS, images)
+            app.routes.insert(-1, Mount("/admin/assets", app=StaticFiles(directory=os.path.join(static_dir, "assets")), name="admin-assets"))
+            # SPA catch-all — must be after /admin/api/* routes
+            app.routes.insert(-1, Route("/admin/{path:path}", spa_fallback))
+            app.routes.insert(-1, Route("/admin", spa_fallback))
+
+        # Middleware stack (last added = outermost = runs first)
+        app.add_middleware(IPBanMiddleware)
+        app.add_middleware(APIKeyAuthMiddleware)
+        app.add_middleware(SearchLogMiddleware)
+
+        async def serve() -> None:
+            config = uvicorn.Config(app, host=args.host, port=args.port, log_level="info")
+            server = uvicorn.Server(config)
+            await server.serve()
 
         asyncio.run(serve())
     else:

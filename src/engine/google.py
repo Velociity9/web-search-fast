@@ -26,20 +26,44 @@ class GoogleSearchEngine(BaseSearchEngine):
 
     async def search(self, page: Page, query: str, max_results: int = 10) -> list[SearchResult]:
         """Override to warm up Google session before searching."""
-        # Visit Google homepage first to establish cookies
+        # Visit Google homepage first to establish cookies (fast, no retry)
         try:
-            await self._navigate(page, "https://www.google.com/", retries=1)
+            await self._navigate(page, "https://www.google.com/", retries=0, timeout=8_000)
+            await self._handle_consent(page)
         except Exception:
             logger.debug("Google homepage warm-up failed, proceeding anyway")
 
         # Now perform the actual search
         url = self.build_search_url(query, 1)
-        await self._navigate(page, url)
+        await self._navigate(page, url, retries=1, timeout=10_000)
 
-        # Brief wait for JS rendering
-        await page.wait_for_timeout(1000)
+        # Wait for JS rendering
+        await page.wait_for_timeout(500)
+
+        # Handle consent again in case it appears on SERP
+        await self._handle_consent(page)
 
         return await self.parse_results(page, max_results)
+
+    async def _handle_consent(self, page: Page) -> None:
+        """Click through Google cookie consent if present."""
+        try:
+            # Google consent form buttons
+            for selector in [
+                'button[id="L2AGLb"]',       # "Accept all" button
+                'button[aria-label*="Accept"]',
+                'button:has-text("Accept all")',
+                'button:has-text("I agree")',
+                'form[action*="consent"] button',
+            ]:
+                btn = await page.query_selector(selector)
+                if btn:
+                    await btn.click()
+                    await page.wait_for_timeout(500)
+                    logger.info("[google] Clicked consent button: %s", selector)
+                    return
+        except Exception:
+            pass
 
     async def parse_results(self, page: Page, max_results: int = 10) -> list[SearchResult]:
         results: list[SearchResult] = []
@@ -50,44 +74,49 @@ class GoogleSearchEngine(BaseSearchEngine):
             logger.warning("Google blocked the request (captcha/sorry page)")
             return results
 
-        # Try multiple selectors for result containers
-        elements = await page.query_selector_all("div#rso div.g")
-        if not elements:
-            elements = await page.query_selector_all("div#search div.g")
-        if not elements:
-            elements = await page.query_selector_all("div.g")
-        if not elements:
-            logger.warning("No Google result elements found on page")
+        # Use JS-based extraction — Google obfuscates CSS classes, so we
+        # walk the DOM from <h3> elements inside #rso instead.
+        raw = await page.evaluate("""(maxResults) => {
+            const rso = document.querySelector('#rso');
+            if (!rso) return [];
+            const items = [];
+            const h3s = rso.querySelectorAll('h3');
+            for (const h3 of h3s) {
+                if (items.length >= maxResults) break;
+                const a = h3.closest('a');
+                if (!a || !a.href || !a.href.startsWith('http')) continue;
+                // Walk up to the top-level result container
+                let container = h3;
+                for (let i = 0; i < 10; i++) {
+                    if (!container.parentElement || container.parentElement === rso) break;
+                    container = container.parentElement;
+                }
+                // Extract snippet from longest <span> that isn't the title
+                let snippet = '';
+                const spans = container.querySelectorAll('span');
+                for (const s of spans) {
+                    const t = (s.textContent || '').trim();
+                    if (t.length > 50 && !t.includes(h3.textContent)) {
+                        snippet = t.substring(0, 300);
+                        break;
+                    }
+                }
+                items.push({title: h3.textContent || '', url: a.href, snippet});
+            }
+            return items;
+        }""", max_results)
+
+        if not raw:
+            logger.warning("No Google results extracted via JS")
+            await self._dump_page_diagnostics(page)
             return results
 
-        for element in elements:
-            if len(results) >= max_results:
-                break
-            try:
-                title_el = await element.query_selector("h3")
-                if not title_el:
-                    continue
-                title = (await title_el.inner_text()).strip()
-                if not title:
-                    continue
-
-                link_el = await element.query_selector("a")
-                if not link_el:
-                    continue
-                url = await link_el.get_attribute("href")
-                if not url or not url.startswith("http"):
-                    continue
-
-                snippet = ""
-                for selector in ("div[data-sncf]", "div.VwiC3b", "div.IsZvec"):
-                    snippet_el = await element.query_selector(selector)
-                    if snippet_el:
-                        snippet = (await snippet_el.inner_text()).strip()
-                        break
-
+        for item in raw:
+            title = (item.get("title") or "").strip()
+            url = (item.get("url") or "").strip()
+            snippet = (item.get("snippet") or "").strip()
+            if title and url:
                 results.append(SearchResult(title=title, url=url, snippet=snippet))
-            except Exception:
-                logger.debug("Failed to parse a Google result element, skipping", exc_info=True)
-                continue
 
+        logger.info("[google] extracted %d results via JS", len(results))
         return results
