@@ -315,6 +315,78 @@ def main() -> None:
 
         app.routes.insert(0, _Route("/health", _health))
 
+        # ---- Search REST API (GET/POST /search) ----
+        from starlette.responses import PlainTextResponse as _PlainTextResponse
+
+        async def _search_get(request):
+            """GET /search?q=...&engine=...&depth=...&format=...&max_results=...&timeout=..."""
+            from src.api.schemas import SearchRequest
+            from src.config import OutputFormat, SearchEngine
+            from src.core.search import SearchError, do_search
+            from src.formatter.json_fmt import format_json
+            from src.formatter.markdown_fmt import format_markdown
+
+            q = request.query_params.get("q", "").strip()
+            if not q:
+                return _JSONResponse({"error": "Missing required parameter: q"}, status_code=400)
+
+            try:
+                req = SearchRequest(
+                    query=q,
+                    engine=SearchEngine(request.query_params.get("engine", "duckduckgo").lower()),
+                    depth=int(request.query_params.get("depth", "1")),
+                    format=OutputFormat(request.query_params.get("format", "json").lower()),
+                    max_results=int(request.query_params.get("max_results", "10")),
+                    timeout=int(request.query_params.get("timeout", "30")),
+                )
+            except (ValueError, Exception) as e:
+                return _JSONResponse({"error": f"Invalid parameter: {e}"}, status_code=400)
+
+            pool = _pool_instance
+            if not pool or not _pool_started:
+                return _JSONResponse({"error": "Browser pool not ready"}, status_code=503)
+
+            try:
+                response = await do_search(pool, req)
+                if req.format == OutputFormat.MARKDOWN:
+                    return _PlainTextResponse(format_markdown(response), media_type="text/markdown")
+                return _JSONResponse(format_json(response))
+            except SearchError as e:
+                return _JSONResponse({"error": str(e)}, status_code=503)
+
+        async def _search_post(request):
+            """POST /search {query, engine, depth, format, max_results, timeout}"""
+            from src.api.schemas import SearchRequest
+            from src.config import OutputFormat
+            from src.core.search import SearchError, do_search
+            from src.formatter.json_fmt import format_json
+            from src.formatter.markdown_fmt import format_markdown
+
+            try:
+                body = await request.json()
+            except Exception:
+                return _JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+
+            try:
+                req = SearchRequest(**body)
+            except Exception as e:
+                return _JSONResponse({"error": f"Invalid request: {e}"}, status_code=400)
+
+            pool = _pool_instance
+            if not pool or not _pool_started:
+                return _JSONResponse({"error": "Browser pool not ready"}, status_code=503)
+
+            try:
+                response = await do_search(pool, req)
+                if req.format == OutputFormat.MARKDOWN:
+                    return _PlainTextResponse(format_markdown(response), media_type="text/markdown")
+                return _JSONResponse(format_json(response))
+            except SearchError as e:
+                return _JSONResponse({"error": str(e)}, status_code=503)
+
+        app.routes.insert(0, _Route("/search", _search_get, methods=["GET"]))
+        app.routes.insert(0, _Route("/search", _search_post, methods=["POST"]))
+
         # Add admin routes before MCP routes
         for route in reversed(admin_routes):
             app.routes.insert(0, route)
