@@ -383,6 +383,11 @@ web-search-mcp/
 | 内容转换 | markdownify（HTML → Markdown） |
 | 数据校验 | Pydantic v2 |
 
+## Claude Code
+
+![img_1.png](img/img_1.png)
+
+
 ## License
 
 MIT
