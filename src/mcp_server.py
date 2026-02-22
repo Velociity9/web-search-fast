@@ -207,11 +207,18 @@ async def list_search_engines(
     from src.core.search import ENGINES
 
     pool: BrowserPool = ctx.request_context.lifespan_context["pool"]
+    stats = pool.stats
     lines = [
         "# Available Search Engines",
         "",
-        f"- **Browser pool active:** {pool._started}",
-        f"- **Pool size:** {pool._pool_size}",
+        "## Browser Pool Status",
+        "",
+        f"- **Active:** {stats['started']}",
+        f"- **Pool size:** {stats['pool_size']}",
+        f"- **Total requests:** {stats['total_requests']}",
+        f"- **Total failures:** {stats['total_failures']}",
+        f"- **Consecutive failures:** {stats['consecutive_failures']}",
+        f"- **Restarts:** {stats['restart_count']}",
         "",
         "## Engines",
         "",
@@ -311,9 +318,18 @@ def main() -> None:
         from starlette.routing import Route as _Route
 
         async def _health(request):
-            return _JSONResponse({"status": "ok"})
+            pool = _pool_instance
+            healthy = pool._started if pool else False
+            return _JSONResponse({"status": "ok" if healthy else "degraded", "browser": healthy})
+
+        async def _pool_stats(request):
+            pool = _pool_instance
+            if not pool:
+                return _JSONResponse({"error": "Pool not initialized"}, status_code=503)
+            return _JSONResponse(pool.stats)
 
         app.routes.insert(0, _Route("/health", _health))
+        app.routes.insert(0, _Route("/pool/stats", _pool_stats))
 
         # ---- Search REST API (GET/POST /search) ----
         from starlette.responses import PlainTextResponse as _PlainTextResponse

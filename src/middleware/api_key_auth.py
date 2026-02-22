@@ -11,7 +11,7 @@ from starlette.responses import JSONResponse
 logger = logging.getLogger(__name__)
 
 # Paths that skip API key auth
-_SKIP_PREFIXES = ("/admin/", "/health")
+_SKIP_PREFIXES = ("/admin/", "/health", "/pool/")
 
 
 class APIKeyAuthMiddleware(BaseHTTPMiddleware):

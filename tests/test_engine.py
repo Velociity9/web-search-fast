@@ -38,3 +38,37 @@ class TestDuckDuckGoEngine:
 
     def test_name(self):
         assert DuckDuckGoSearchEngine().name == "duckduckgo"
+
+
+class TestDDGUrlResolver:
+    """Test _resolve_ddg_url which extracts real URLs from DDG redirect links."""
+
+    def test_redirect_url_with_uddg(self):
+        from src.engine.duckduckgo import _resolve_ddg_url
+        raw = "//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fpage&rut=abc123"
+        assert _resolve_ddg_url(raw) == "https://example.com/page"
+
+    def test_protocol_relative_non_redirect(self):
+        from src.engine.duckduckgo import _resolve_ddg_url
+        raw = "//example.com/page"
+        assert _resolve_ddg_url(raw) == "https://example.com/page"
+
+    def test_direct_http_url(self):
+        from src.engine.duckduckgo import _resolve_ddg_url
+        assert _resolve_ddg_url("https://example.com") == "https://example.com"
+
+    def test_empty_url(self):
+        from src.engine.duckduckgo import _resolve_ddg_url
+        assert _resolve_ddg_url("") is None
+        assert _resolve_ddg_url(None) is None
+
+    def test_redirect_with_encoded_uddg(self):
+        from src.engine.duckduckgo import _resolve_ddg_url
+        raw = "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fen.wikipedia.org%2Fwiki%2FHello&rut=x"
+        assert _resolve_ddg_url(raw) == "https://en.wikipedia.org/wiki/Hello"
+
+    def test_no_uddg_param(self):
+        from src.engine.duckduckgo import _resolve_ddg_url
+        raw = "https://duckduckgo.com/l/?foo=bar"
+        # Falls back to returning the URL itself since it starts with http
+        assert _resolve_ddg_url(raw) == "https://duckduckgo.com/l/?foo=bar"

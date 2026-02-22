@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
@@ -9,6 +10,11 @@ from camoufox.async_api import AsyncCamoufox
 from playwright.async_api import Browser, Page
 
 logger = logging.getLogger(__name__)
+
+# Max consecutive failures before auto-restart
+_MAX_CONSECUTIVE_FAILURES = 3
+# Health check: navigate about:blank within this timeout (ms)
+_HEALTH_CHECK_TIMEOUT_MS = 5000
 
 
 class BrowserPool:
@@ -40,37 +46,53 @@ class BrowserPool:
         self._browser: Browser | None = None
         self._semaphore = asyncio.Semaphore(pool_size)
         self._started = False
+        # --- health tracking ---
+        self._consecutive_failures = 0
+        self._total_requests = 0
+        self._total_failures = 0
+        self._restart_count = 0
+        self._restart_lock = asyncio.Lock()
+    def _build_camoufox_kwargs(self) -> dict:
+        """Build kwargs dict for AsyncCamoufox — used by start() and restart()."""
+        from camoufox.addons import DefaultAddons
 
-    async def start(self) -> None:
-        if self._started:
-            return
-        camoufox_kwargs: dict = {
+        kwargs: dict = {
             "headless": self._headless,
             "geoip": self._geoip,
             "humanize": self._humanize if self._humanize > 0 else False,
             "locale": self._locale,
         }
         if self._block_images:
-            camoufox_kwargs["block_images"] = True
-            camoufox_kwargs["i_know_what_im_doing"] = True
+            kwargs["block_images"] = True
+            kwargs["i_know_what_im_doing"] = True
         if self._proxy:
-            camoufox_kwargs["proxy"] = {"server": self._proxy}
+            kwargs["proxy"] = {"server": self._proxy}
         if self._os_target:
-            camoufox_kwargs["os"] = self._os_target
+            kwargs["os"] = self._os_target
         if self._fonts:
-            camoufox_kwargs["fonts"] = self._fonts
+            kwargs["fonts"] = self._fonts
         if self._block_webgl:
-            camoufox_kwargs["block_webgl"] = True
+            kwargs["block_webgl"] = True
         if self._addons:
-            camoufox_kwargs["addons"] = self._addons
-        self._camoufox = AsyncCamoufox(**camoufox_kwargs)
+            kwargs["addons"] = self._addons
+        else:
+            # Exclude default addons (uBlock Origin) — download/extraction
+            # fails in Docker containers, causing InvalidAddonPath crash.
+            kwargs["exclude_addons"] = [DefaultAddons.UBO]
+        return kwargs
+
+    async def start(self) -> None:
+        if self._started:
+            return
+        t0 = time.monotonic()
+        self._camoufox = AsyncCamoufox(**self._build_camoufox_kwargs())
         self._browser = await self._camoufox.__aenter__()
         self._started = True
+        elapsed = (time.monotonic() - t0) * 1000
         logger.info(
-            "BrowserPool started (tab-per-search): pool_size=%d, "
-            "geoip=%s, humanize=%s, locale=%s, block_images=%s, "
-            "proxy=%s, os=%s, block_webgl=%s",
-            self._pool_size, self._geoip, self._humanize,
+            "[pool] started in %.0fms: pool_size=%d, geoip=%s, humanize=%s, "
+            "locale=%s, block_images=%s, proxy=%s, os=%s, block_webgl=%s",
+            elapsed, self._pool_size, self._geoip, self._humanize,
             self._locale, self._block_images,
             bool(self._proxy), self._os_target or "auto", self._block_webgl,
         )
@@ -78,21 +100,94 @@ class BrowserPool:
     async def stop(self) -> None:
         if not self._started:
             return
-        await self._camoufox.__aexit__(None, None, None)
+        try:
+            await self._camoufox.__aexit__(None, None, None)
+        except Exception as exc:
+            logger.warning("[pool] error during stop: %s", exc)
         self._started = False
         self._browser = None
-        logger.info("BrowserPool stopped")
+        logger.info("[pool] stopped (requests=%d, failures=%d, restarts=%d)",
+                     self._total_requests, self._total_failures, self._restart_count)
+
+    async def restart(self) -> None:
+        """Stop and re-create the browser. Serialized via lock to avoid races."""
+        async with self._restart_lock:
+            self._restart_count += 1
+            logger.warning("[pool] restarting browser (restart #%d, consecutive_failures=%d)",
+                           self._restart_count, self._consecutive_failures)
+            await self.stop()
+            await self.start()
+            self._consecutive_failures = 0
+            logger.info("[pool] browser restarted successfully")
+
+    async def is_healthy(self) -> bool:
+        """Quick health check — open a blank page and close it."""
+        if not self._started or not self._browser:
+            return False
+        try:
+            page = await self._browser.new_page()
+            await page.goto("about:blank", timeout=_HEALTH_CHECK_TIMEOUT_MS)
+            await page.close()
+            return True
+        except Exception as exc:
+            logger.warning("[pool] health check failed: %s", exc)
+            return False
+
+    def record_success(self) -> None:
+        """Record a successful request — resets consecutive failure counter."""
+        self._consecutive_failures = 0
+
+    def record_failure(self) -> None:
+        """Record a failed request — increments counters."""
+        self._consecutive_failures += 1
+        self._total_failures += 1
+        logger.warning("[pool] failure recorded (consecutive=%d, total=%d)",
+                       self._consecutive_failures, self._total_failures)
+
+    @property
+    def needs_restart(self) -> bool:
+        return self._consecutive_failures >= _MAX_CONSECUTIVE_FAILURES
+
+    @property
+    def stats(self) -> dict:
+        return {
+            "started": self._started,
+            "pool_size": self._pool_size,
+            "total_requests": self._total_requests,
+            "total_failures": self._total_failures,
+            "consecutive_failures": self._consecutive_failures,
+            "restart_count": self._restart_count,
+        }
 
     @asynccontextmanager
     async def acquire(self) -> AsyncGenerator[Page, None]:
+        """Acquire a browser tab. Auto-restarts browser if unhealthy."""
+        self._total_requests += 1
+        req_id = self._total_requests
+
+        # Pre-check: restart if too many consecutive failures
+        if self.needs_restart:
+            logger.warning("[pool] req#%d — too many failures, triggering restart before acquire", req_id)
+            await self.restart()
+
         async with self._semaphore:
-            page = await self._browser.new_page()
-            logger.debug("New tab opened for search")
+            t0 = time.monotonic()
+            try:
+                page = await self._browser.new_page()  # type: ignore[union-attr]
+            except Exception as exc:
+                logger.error("[pool] req#%d — new_page() failed: %s, restarting browser", req_id, exc)
+                await self.restart()
+                page = await self._browser.new_page()  # type: ignore[union-attr]
+
+            open_ms = (time.monotonic() - t0) * 1000
+            logger.info("[pool] req#%d — tab opened in %.0fms (semaphore slots: %d/%d)",
+                        req_id, open_ms, self._semaphore._value, self._pool_size)
             try:
                 yield page
             finally:
                 try:
                     await page.close()
-                    logger.debug("Tab closed after search")
-                except Exception:
-                    pass
+                    close_ms = (time.monotonic() - t0) * 1000
+                    logger.info("[pool] req#%d — tab closed (total %.0fms)", req_id, close_ms)
+                except Exception as exc:
+                    logger.warning("[pool] req#%d — tab close failed: %s", req_id, exc)
