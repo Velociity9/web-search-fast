@@ -18,7 +18,8 @@ class OutputFormat(str, Enum):
 
 
 class BrowserConfig(BaseModel):
-    pool_size: int = Field(default=5, ge=1, le=20, description="Number of browser instances in pool")
+    pool_size: int = Field(default=5, ge=1, le=50, description="Initial browser concurrency slots")
+    max_pool_size: int = Field(default=20, ge=1, le=50, description="Max auto-scaled concurrency slots")
     headless: bool = Field(default=True)
     timeout: int = Field(default=30, ge=5, le=120, description="Page load timeout in seconds")
     geoip: bool = Field(default=True, description="Enable GeoIP spoofing based on real IP")
@@ -52,6 +53,8 @@ def get_config() -> AppConfig:
     browser_kwargs: dict = {}
     if pool_size := os.environ.get("BROWSER_POOL_SIZE"):
         browser_kwargs["pool_size"] = int(pool_size)
+    if max_pool_size := os.environ.get("BROWSER_MAX_POOL_SIZE"):
+        browser_kwargs["max_pool_size"] = int(max_pool_size)
     if proxy := os.environ.get("BROWSER_PROXY"):
         browser_kwargs["proxy"] = proxy
     if os_target := os.environ.get("BROWSER_OS"):

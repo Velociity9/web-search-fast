@@ -27,7 +27,9 @@ async def _setup_db():
 @pytest.fixture()
 def client():
     from starlette.applications import Starlette
+    from src.middleware.api_key_auth import APIKeyAuthMiddleware
     app = Starlette(routes=admin_routes)
+    app.add_middleware(APIKeyAuthMiddleware)
     return TestClient(app)
 
 
@@ -108,6 +110,54 @@ class TestAPIKeysEndpoints:
 
 
 # PLACEHOLDER_MORE_TESTS
+
+
+class TestSystemEndpoint:
+    def test_get_system(self, client, auth_headers):
+        with _patch_admin_token():
+            resp = client.get("/admin/api/system", headers=auth_headers)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "cpu_percent" in data
+        assert "memory" in data
+        assert "total_gb" in data["memory"]
+        assert "percent" in data["memory"]
+        assert "process" in data
+        assert "rss_mb" in data["process"]
+        assert "pool" in data
+        assert "started" in data["pool"]
+        assert "active_tabs" in data["pool"]
+
+
+class TestAnalyticsEndpoint:
+    def test_get_analytics_empty(self, client, auth_headers):
+        with _patch_admin_token():
+            resp = client.get("/admin/api/analytics", headers=auth_headers)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "timeline" in data
+        assert "engines" in data
+        assert "success_rate" in data
+        assert isinstance(data["timeline"], list)
+        assert isinstance(data["engines"], list)
+
+    @pytest.mark.asyncio
+    async def test_analytics_with_data(self, client, auth_headers):
+        from src.admin.repository import log_search
+        await log_search(query="test1", ip_address="1.1.1.1", engine="duckduckgo", status_code=200, elapsed_ms=150)
+        await log_search(query="test2", ip_address="1.1.1.1", engine="google", status_code=200, elapsed_ms=300)
+        await log_search(query="test3", ip_address="1.1.1.1", engine="duckduckgo", status_code=500, elapsed_ms=50)
+
+        with _patch_admin_token():
+            resp = client.get("/admin/api/analytics?hours=24", headers=auth_headers)
+        data = resp.json()
+        assert len(data["engines"]) >= 1
+        assert data["success_rate"] < 100  # one 500 status
+
+    def test_analytics_7d(self, client, auth_headers):
+        with _patch_admin_token():
+            resp = client.get("/admin/api/analytics?hours=168", headers=auth_headers)
+        assert resp.status_code == 200
 
 
 class TestIPBansEndpoints:

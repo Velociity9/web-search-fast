@@ -95,7 +95,7 @@ class TestBrowserPoolAcquire:
         browser.new_page = AsyncMock(side_effect=lambda: AsyncMock())
 
         with patch("src.scraper.browser.AsyncCamoufox", return_value=mock_camoufox):
-            pool = BrowserPool(pool_size=2)
+            pool = BrowserPool(pool_size=2, max_pool_size=2)
             await pool.start()
 
             active = 0

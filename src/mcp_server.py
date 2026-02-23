@@ -37,6 +37,7 @@ async def _ensure_pool() -> BrowserPool:
     config = get_config()
     _pool_instance = BrowserPool(
         pool_size=config.browser.pool_size,
+        max_pool_size=config.browser.max_pool_size,
         headless=config.browser.headless,
         geoip=config.browser.geoip,
         humanize=config.browser.humanize,
@@ -48,9 +49,17 @@ async def _ensure_pool() -> BrowserPool:
         block_webgl=config.browser.block_webgl,
         addons=config.browser.addons,
     )
+    # Wire up Redis stats push callback
+    try:
+        from src.admin.repository import save_pool_stats
+        _pool_instance.set_stats_callback(save_pool_stats)
+    except Exception:
+        pass
     await _pool_instance.start()
     _pool_started = True
-    logger.info("[pool] BrowserPool ready (size=%d) in %.1fms", config.browser.pool_size, (_t.monotonic() - t0) * 1000)
+    logger.info("[pool] BrowserPool ready (size=%d, max=%d) in %.1fms",
+                config.browser.pool_size, config.browser.max_pool_size,
+                (_t.monotonic() - t0) * 1000)
     return _pool_instance
 
 
@@ -408,7 +417,11 @@ def main() -> None:
             app.routes.insert(0, route)
 
         # Serve admin SPA static files if built (after API routes, before MCP catch-all)
-        static_dir = os.path.join(os.path.dirname(__file__), "admin", "static")
+        # Try multiple paths: local dev (__file__ = src/mcp_server.py) and Nuitka binary
+        _base = os.path.dirname(os.path.abspath(__file__))
+        static_dir = os.path.join(_base, "admin", "static")
+        if not os.path.isdir(static_dir):
+            static_dir = os.path.join(_base, "src", "admin", "static")
         if os.path.isdir(static_dir):
             from starlette.responses import FileResponse
             from starlette.routing import Route

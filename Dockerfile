@@ -16,6 +16,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc g++ patchelf ccache \
     && rm -rf /var/lib/apt/lists/*
 
+# PyPI mirror (avoids VPN/SSL interception issues with pypi.org)
+ENV PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
+    PIP_TRUSTED_HOST=mirrors.aliyun.com
+
 COPY pyproject.toml ./
 COPY src/ ./src/
 
@@ -46,11 +50,19 @@ RUN pip install --no-cache-dir -e . nuitka ordered-set && \
         --include-package=playwright \
         --include-package=certifi \
         --include-package=h11 \
-        --include-package=sniffio \
         --include-package=idna \
         --include-package=typing_extensions \
         --include-package=aiosqlite \
         --include-package=redis \
+        --include-package=psutil \
+        --include-package-data=src \
+        --include-package-data=apify_fingerprint_datapoints \
+        --include-package-data=browserforge \
+        --include-package-data=camoufox \
+        --include-package-data=certifi \
+        --include-package-data=language_tags \
+        --include-package-data=geoip2 \
+        --include-package-data=maxminddb \
         --nofollow-import-to=pytest \
         --nofollow-import-to=setuptools \
         --nofollow-import-to=pip \
@@ -92,6 +104,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Copy Nuitka compiled binary
 COPY --from=builder /build/mcp_server.dist/ /app/bin/
+
+# PyPI mirror for runtime stage
+ENV PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
+    PIP_TRUSTED_HOST=mirrors.aliyun.com
 
 # Fetch Camoufox browser binary (needs pip camoufox for the fetch command)
 RUN pip install --no-cache-dir "camoufox[geoip]>=0.4.11" && \

@@ -15,12 +15,19 @@ logger = logging.getLogger(__name__)
 _MAX_CONSECUTIVE_FAILURES = 3
 # Health check: navigate about:blank within this timeout (ms)
 _HEALTH_CHECK_TIMEOUT_MS = 5000
+# Auto-scaling defaults
+_DEFAULT_POOL_SIZE = 5
+_DEFAULT_MAX_POOL_SIZE = 20
+_SCALE_UP_THRESHOLD = 0.8   # scale up when 80% of semaphore slots are in use
+_SCALE_DOWN_THRESHOLD = 0.3  # scale down when <30% utilization for cooldown period
+_SCALE_COOLDOWN_SECS = 30    # minimum seconds between scaling events
 
 
 class BrowserPool:
     def __init__(
         self,
-        pool_size: int = 5,
+        pool_size: int = _DEFAULT_POOL_SIZE,
+        max_pool_size: int = _DEFAULT_MAX_POOL_SIZE,
         headless: bool = True,
         geoip: bool = True,
         humanize: float = 2.0,
@@ -33,6 +40,8 @@ class BrowserPool:
         addons: list[str] | None = None,
     ):
         self._pool_size = pool_size
+        self._max_pool_size = max(pool_size, max_pool_size)
+        self._min_pool_size = pool_size  # original size is the floor
         self._headless = headless
         self._geoip = geoip
         self._humanize = humanize
@@ -52,6 +61,13 @@ class BrowserPool:
         self._total_failures = 0
         self._restart_count = 0
         self._restart_lock = asyncio.Lock()
+        self._active_tabs = 0
+        # --- auto-scaling ---
+        self._last_scale_time = 0.0
+        self._scale_lock = asyncio.Lock()
+        # --- Redis stats push callback ---
+        self._stats_callback = None
+
     def _build_camoufox_kwargs(self) -> dict:
         """Build kwargs dict for AsyncCamoufox — used by start() and restart()."""
         from camoufox.addons import DefaultAddons
@@ -153,15 +169,58 @@ class BrowserPool:
         return {
             "started": self._started,
             "pool_size": self._pool_size,
+            "max_pool_size": self._max_pool_size,
+            "active_tabs": self._active_tabs,
             "total_requests": self._total_requests,
             "total_failures": self._total_failures,
             "consecutive_failures": self._consecutive_failures,
             "restart_count": self._restart_count,
         }
 
+    def set_stats_callback(self, callback) -> None:
+        """Set an async callback that receives stats dict on every state change."""
+        self._stats_callback = callback
+
+    async def _push_stats(self) -> None:
+        """Push current stats via callback (non-blocking, fire-and-forget)."""
+        if self._stats_callback:
+            try:
+                await self._stats_callback(self.stats)
+            except Exception:
+                pass
+
+    async def _maybe_scale_up(self) -> None:
+        """Increase semaphore capacity if utilization is high."""
+        if self._pool_size >= self._max_pool_size:
+            return
+        # Check utilization: (pool_size - available) / pool_size
+        available = self._semaphore._value
+        utilization = (self._pool_size - available) / self._pool_size if self._pool_size > 0 else 0
+        if utilization < _SCALE_UP_THRESHOLD:
+            return
+        now = time.monotonic()
+        if now - self._last_scale_time < _SCALE_COOLDOWN_SECS:
+            return
+        async with self._scale_lock:
+            # Double-check after acquiring lock
+            if self._pool_size >= self._max_pool_size:
+                return
+            old_size = self._pool_size
+            # Scale up by 50%, capped at max
+            new_size = min(self._max_pool_size, self._pool_size + max(1, self._pool_size // 2))
+            delta = new_size - old_size
+            self._pool_size = new_size
+            # Release extra semaphore slots
+            for _ in range(delta):
+                self._semaphore.release()
+            self._last_scale_time = time.monotonic()
+            logger.info("[pool] scaled UP: %d → %d (utilization=%.0f%%)",
+                        old_size, new_size, utilization * 100)
+            await self._push_stats()
+
     @asynccontextmanager
     async def acquire(self) -> AsyncGenerator[Page, None]:
-        """Acquire a browser tab. Auto-restarts browser if unhealthy."""
+        """Acquire a browser tab. Auto-scales and auto-restarts if needed."""
         self._total_requests += 1
         req_id = self._total_requests
 
@@ -169,6 +228,9 @@ class BrowserPool:
         if self.needs_restart:
             logger.warning("[pool] req#%d — too many failures, triggering restart before acquire", req_id)
             await self.restart()
+
+        # Auto-scale up if utilization is high
+        await self._maybe_scale_up()
 
         async with self._semaphore:
             t0 = time.monotonic()
@@ -182,9 +244,13 @@ class BrowserPool:
             open_ms = (time.monotonic() - t0) * 1000
             logger.info("[pool] req#%d — tab opened in %.0fms (semaphore slots: %d/%d)",
                         req_id, open_ms, self._semaphore._value, self._pool_size)
+            self._active_tabs += 1
+            await self._push_stats()
             try:
                 yield page
             finally:
+                self._active_tabs -= 1
+                await self._push_stats()
                 try:
                     await page.close()
                     close_ms = (time.monotonic() - t0) * 1000

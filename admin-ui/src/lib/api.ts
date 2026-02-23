@@ -38,6 +38,8 @@ export const api = {
   banIP: (data: { ip: string; reason: string }) =>
     request<IPBan>('/ip-bans', { method: 'POST', body: JSON.stringify(data) }),
   unbanIP: (ip: string) => request<{ ok: boolean }>(`/ip-bans/${ip}`, { method: 'DELETE' }),
+  getSystem: () => request<SystemInfo>('/system'),
+  getAnalytics: (hours = 24) => request<Analytics>(`/analytics?hours=${hours}`),
 }
 
 export interface Stats {
@@ -86,4 +88,38 @@ export interface IPBan {
   ip_address: string
   reason: string
   created_at: string
+}
+
+export interface SystemInfo {
+  cpu_percent: number
+  memory: { total_gb: number; used_gb: number; percent: number }
+  process: { rss_mb: number; vms_mb: number }
+  pool: {
+    started: boolean
+    pool_size: number
+    max_pool_size: number
+    active_tabs: number
+    total_requests: number
+    total_failures: number
+    consecutive_failures: number
+    restart_count: number
+  }
+}
+
+export interface TimelinePoint {
+  hour: string
+  avg_ms: number
+  p95_ms: number
+  count: number
+}
+
+export interface EngineStats {
+  name: string
+  count: number
+}
+
+export interface Analytics {
+  timeline: TimelinePoint[]
+  engines: EngineStats[]
+  success_rate: number
 }

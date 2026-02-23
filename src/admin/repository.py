@@ -199,6 +199,41 @@ async def list_search_logs(
 # ---------------------------------------------------------------------------
 
 _REDIS_BAN_KEY = "wsm:ip:banned"
+_REDIS_POOL_KEY = "wsm:pool:stats"
+
+
+async def save_pool_stats(stats: dict) -> None:
+    """Push pool stats to Redis for real-time access."""
+    if not _redis:
+        return
+    try:
+        # Store as Redis hash for atomic read/write
+        await _redis.hset(_REDIS_POOL_KEY, mapping={k: str(v) for k, v in stats.items()})
+    except Exception:
+        pass
+
+
+async def get_pool_stats() -> dict | None:
+    """Read pool stats from Redis. Returns None if unavailable."""
+    if not _redis:
+        return None
+    try:
+        data = await _redis.hgetall(_REDIS_POOL_KEY)
+        if not data:
+            return None
+        # Convert string values back to proper types
+        result = {}
+        for k, v in data.items():
+            if v in ("True", "False"):
+                result[k] = v == "True"
+            else:
+                try:
+                    result[k] = int(v)
+                except ValueError:
+                    result[k] = v
+        return result
+    except Exception:
+        return None
 
 
 async def ban_ip(ip: str, reason: str = "") -> IPBanOut:
@@ -271,3 +306,52 @@ async def get_stats() -> DashboardStats:
         total_searches=total, searches_today=today_count,
         active_keys=active_keys, banned_ips=banned,
     )
+
+
+async def get_analytics(hours: int = 24) -> dict:
+    """Aggregate search analytics: timeline, engine distribution, success rate."""
+    db = await get_db()
+    interval = f"-{hours} hours"
+
+    timeline_rows = await db.execute_fetchall(
+        "SELECT strftime('%Y-%m-%d %H:00', created_at) as hour, "
+        "AVG(elapsed_ms) as avg_ms, COUNT(*) as count "
+        "FROM search_logs "
+        "WHERE created_at >= datetime('now', ?) AND elapsed_ms IS NOT NULL "
+        "GROUP BY hour ORDER BY hour",
+        (interval,),
+    )
+    timeline = []
+    for r in timeline_rows:
+        hour = r["hour"]
+        avg_ms = round(r["avg_ms"] or 0, 1)
+        count = r["count"]
+        p95_rows = await db.execute_fetchall(
+            "SELECT elapsed_ms FROM search_logs "
+            "WHERE strftime('%Y-%m-%d %H:00', created_at) = ? AND elapsed_ms IS NOT NULL "
+            "ORDER BY elapsed_ms",
+            (hour,),
+        )
+        values = [row["elapsed_ms"] for row in p95_rows]
+        p95_ms = values[int(len(values) * 0.95)] if values else 0
+        timeline.append({"hour": hour, "avg_ms": avg_ms, "p95_ms": p95_ms, "count": count})
+
+    engine_rows = await db.execute_fetchall(
+        "SELECT engine, COUNT(*) as count FROM search_logs "
+        "WHERE created_at >= datetime('now', ?) AND engine IS NOT NULL "
+        "GROUP BY engine ORDER BY count DESC",
+        (interval,),
+    )
+    engines = [{"name": r["engine"], "count": r["count"]} for r in engine_rows]
+
+    total_rows = await db.execute_fetchall(
+        "SELECT COUNT(*) as total, "
+        "SUM(CASE WHEN status_code IS NULL OR status_code < 400 THEN 1 ELSE 0 END) as success "
+        "FROM search_logs WHERE created_at >= datetime('now', ?)",
+        (interval,),
+    )
+    total = total_rows[0]["total"]
+    success = total_rows[0]["success"]
+    success_rate = round((success / total * 100) if total > 0 else 100, 1)
+
+    return {"timeline": timeline, "engines": engines, "success_rate": success_rate}
