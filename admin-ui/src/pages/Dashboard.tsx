@@ -203,15 +203,21 @@ export default function Dashboard() {
         <div className="rounded-lg border bg-white p-4 shadow-sm">
           <h2 className="text-lg font-semibold mb-4">Engine Distribution</h2>
           {analytics ? (
-            <ResponsiveContainer width="100%" height={250}>
-              <BarChart data={analytics.engines}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="name" />
-                <YAxis />
-                <Tooltip />
-                <Bar dataKey="count" fill="#8b5cf6" />
-              </BarChart>
-            </ResponsiveContainer>
+            analytics.engines.length > 0 ? (
+              <ResponsiveContainer width="100%" height={250}>
+                <BarChart data={analytics.engines} barSize={60}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="name" />
+                  <YAxis allowDecimals={false} />
+                  <Tooltip />
+                  <Bar dataKey="count" fill="#8b5cf6" radius={[4, 4, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="h-[250px] flex items-center justify-center text-gray-400 text-sm">
+                No engine data yet
+              </div>
+            )
           ) : (
             <div className="h-[250px] flex items-center justify-center text-gray-400">Loading...</div>
           )}

@@ -10,7 +10,7 @@ set -euo pipefail
 
 # --- Config ---
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-PYTHON="/Users/firshme/miniconda/bin/python"
+PYTHON="${PYTHON:-python3}"
 MCP_NAME="web-search-fast"
 SCOPE="user"                    # user | local | project
 HOST="127.0.0.1"
@@ -114,20 +114,22 @@ restart() {
 }
 
 # --- Register Docker HTTP mode ---
+# Usage:
+#   WSM_API_KEY=wsm_xxx ./scripts/mcp-server.sh docker-register
 docker_register() {
     local DOCKER_HOST="${DOCKER_MCP_HOST:-127.0.0.1}"
     local DOCKER_PORT="${DOCKER_MCP_PORT:-8897}"
-    local AUTH_VAL="${MCP_AUTH_TOKEN:-}"
+    local API_KEY="${WSM_API_KEY:-}"
     local MCP_URL="http://${DOCKER_HOST}:${DOCKER_PORT}/mcp"
 
     claude mcp remove "$MCP_NAME" -s "$SCOPE" 2>/dev/null || true
 
-    if [ -n "$AUTH_VAL" ]; then
+    if [ -n "$API_KEY" ]; then
         claude mcp add-json -s "$SCOPE" "$MCP_NAME" "$(cat <<ENDJSON
 {
   "type": "http",
   "url": "$MCP_URL",
-  "headers": {"Authorization": "Bearer $AUTH_VAL"}
+  "headers": {"Authorization": "Bearer $API_KEY"}
 }
 ENDJSON
 )"
@@ -135,6 +137,7 @@ ENDJSON
     else
         claude mcp add -s "$SCOPE" -t http "$MCP_NAME" "$MCP_URL" 2>/dev/null
         echo "Registered $MCP_NAME (http, no auth, scope=$SCOPE)"
+        echo "  ⚠ No WSM_API_KEY set. Create one via Admin panel and re-register."
     fi
     echo "  url: $MCP_URL"
     echo ""
@@ -176,7 +179,7 @@ case "${1:-register}" in
         echo "  status           Show registration and server status"
         echo "  restart          Restart HTTP background server"
         echo "  update           Unregister + re-register stdio MCP"
-        echo "  docker-register  Register Docker HTTP MCP (set MCP_AUTH_TOKEN for auth)"
+        echo "  docker-register  Register Docker HTTP MCP (set WSM_API_KEY for auth)"
         echo "  docker-update    Unregister + re-register Docker HTTP MCP"
         ;;
 esac

@@ -1,313 +1,391 @@
 # Web Search MCP
 
-基于 **Camoufox + FastAPI** 的高性能 Web 搜索服务，将搜索引擎结果转换为结构化 JSON / Markdown 输出。支持 MCP 协议（Streamable HTTP）供 LLM 客户端直接调用，同时提供 Admin 管理面板。
+> High-performance web search service for LLM clients via [Model Context Protocol](https://modelcontextprotocol.io). Powered by Camoufox stealth browser.
 
-## 功能特性
+[English](#features) | [中文](#功能特性)
 
-- **三大搜索引擎**：Google、Bing、DuckDuckGo（自动回退）
-- **多层深度抓取**：SERP 解析 → 正文提取 → 外链抓取
-- **双格式输出**：JSON / Markdown
-- **反检测浏览器**：Camoufox 真实浏览器指纹（GeoIP、Humanize、Locale）
-- **自动扩容**：浏览器池并发达 80% 时自动扩容，上限可配
-- **Admin 管理面板**：搜索统计、系统监控、API Key 管理、IP 封禁
-- **API Key 认证**：Bearer Token 保护 MCP 端点和 Admin API
 
-## 搜索深度
+---
 
-| depth | 行为 | 说明 |
-|-------|------|------|
-| `1` | SERP 解析 | 默认。提取标题、链接、摘要 |
-| `2` | SERP + 正文 | 进入每个结果链接，提取页面正文 |
-| `3` | SERP + 正文 + 外链 | 继续抓取正文中的外部链接内容 |
 
-## 部署（Docker Compose）
+![img_2.png](img/img_2.png)
 
-### 1. 准备环境变量
+---
+
+![img.png](img/img.png)
+
+
+## Features
+
+- **3 Search Engines** — Google, Bing, DuckDuckGo with automatic fallback
+- **Multi-depth Scraping** — SERP parsing → full-text extraction → outbound link crawling
+- **Stealth Browser** — [Camoufox](https://github.com/nicepkg/camoufox) anti-detection Firefox (GeoIP, Humanize, Locale)
+- **Auto-scaling Pool** — Browser pool auto-scales at 80% utilization, configurable upper limit
+- **Admin Dashboard** — Search analytics, system monitoring, API key management, IP banning
+- **API Key Auth** — Built-in key generation (`wsm_` prefix) with call limits and revocation
+- **Dual Output** — JSON and Markdown formats
+- **REST API** — Standard HTTP API alongside MCP protocol
+
+## Quick Start
+
+### Docker (Recommended)
 
 ```bash
+git clone https://github.com/nicepkg/web-search-mcp.git
+cd web-search-mcp
+
+# Configure
 cp .env.example .env
-```
+# Edit .env — set ADMIN_TOKEN
 
-编辑 `.env` 文件，设置关键参数：
-
-```bash
-# MCP 端点认证 Token（客户端调用时需携带）
-MCP_AUTH_TOKEN=your-mcp-token-here
-
-# Admin 面板认证 Token
-ADMIN_TOKEN=your-admin-token-here
-
-# 浏览器池配置
-BROWSER_POOL_SIZE=5        # 初始 tab 数
-BROWSER_MAX_POOL_SIZE=20   # 自动扩容上限
-```
-
-### 2. 构建并启动
-
-```bash
+# Launch
 docker compose up -d
-```
 
-首次构建需要编译 Nuitka 二进制，耗时较长。后续启动秒级完成。
-
-### 3. 验证服务
-
-```bash
-# 健康检查
+# Verify
 curl http://127.0.0.1:8897/health
-# {"status":"ok","pool_ready":true}
-
-# 查看容器状态
-docker compose ps
 ```
 
-服务就绪后：
-
-| 地址 | 说明 |
-|------|------|
-| `http://127.0.0.1:8897/mcp` | MCP 端点（Streamable HTTP） |
-| `http://127.0.0.1:8897/health` | 健康检查 |
-| `http://127.0.0.1:8897/admin` | Admin 管理面板 |
-| `http://127.0.0.1:8897/search` | REST API 搜索端点 |
-
-### 4. 停止 / 更新
+### Create API Key & Register to Claude Code
 
 ```bash
-# 停止
-docker compose down
-
-# 更新代码后重新构建
-docker compose up -d --build
-```
-
-## Admin 管理面板
-
-访问 `http://127.0.0.1:8897/admin`，输入 `ADMIN_TOKEN` 登录。
-
-面板功能：
-- **Dashboard** — 搜索统计、CPU/内存监控、浏览器池状态、搜索延迟曲线、引擎分布、成功率
-- **API Keys** — 创建/吊销 API Key，设置调用限额
-- **IP Bans** — 封禁/解封 IP 地址
-- **Search Logs** — 搜索历史记录，支持按 IP 过滤
-
-### 通过 API 管理 Key
-
-```bash
-# 创建 API Key（返回 wsm_ 前缀的密钥，仅创建时可见）
+# 1. Create an API key via Admin API
 curl -X POST http://127.0.0.1:8897/admin/api/keys \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"name": "claude-code", "call_limit": 10000}'
+# Save the returned wsm_xxx key (only shown once)
 
-# 列出所有 Key
-curl http://127.0.0.1:8897/admin/api/keys \
-  -H "Authorization: Bearer $ADMIN_TOKEN"
-
-# 吊销 Key
-curl -X DELETE http://127.0.0.1:8897/admin/api/keys/{key_id} \
-  -H "Authorization: Bearer $ADMIN_TOKEN"
-```
-
-## 添加到 Claude Code MCP
-
-部署完成后，将服务注册为 Claude Code 的 MCP 工具。
-
-### 方式一：使用脚本（推荐）
-
-```bash
-# 设置认证 Token（与 .env 中的 MCP_AUTH_TOKEN 一致）
-export MCP_AUTH_TOKEN=your-mcp-token-here
-
-# 注册到 Claude Code
-./scripts/mcp-server.sh docker-register
-```
-
-### 方式二：手动注册
-
-```bash
-# 无认证
-claude mcp add -s user -t http web-search-fast http://127.0.0.1:8897/mcp
-
-# 有认证（推荐）
-claude mcp add-json -s user web-search-fast '{
-  "type": "http",
-  "url": "http://127.0.0.1:8897/mcp",
-  "headers": {"Authorization": "Bearer your-mcp-token-here"}
-}'
-```
-
-### 方式三：使用 Admin 面板创建的 API Key
-
-如果你通过 Admin 面板创建了 API Key（`wsm_` 前缀），也可以用它注册：
-
-```bash
+# 2. Register MCP to Claude Code
 claude mcp add-json -s user web-search-fast '{
   "type": "http",
   "url": "http://127.0.0.1:8897/mcp",
   "headers": {"Authorization": "Bearer wsm_your-api-key-here"}
 }'
+
+# 3. Restart Claude Code session
 ```
 
-注册后重启 Claude Code 会话即可使用 `web_search`、`get_page_content`、`list_search_engines` 三个工具。
-
-### 认证优先级
-
-服务按以下顺序验证 Bearer Token：
-
-1. `MCP_AUTH_TOKEN` 环境变量（全局 Token）
-2. `ADMIN_TOKEN` 环境变量（Admin Token）
-3. 数据库中的 API Key（`wsm_` 前缀，通过 Admin 面板创建）
-
-如果未配置任何认证（所有 Token 为空且无 DB Key），服务将允许无认证访问。
+Or use the Admin Dashboard at `http://127.0.0.1:8897/admin` to create keys visually.
 
 ## MCP Tools
 
-注册后 Claude Code 可使用以下工具：
+| Tool | Description | Timeout |
+|------|-------------|---------|
+| `web_search` | Search the web, returns Markdown results | 25s |
+| `get_page_content` | Fetch and extract content from a URL | 20s |
+| `list_search_engines` | List available engines and pool status | — |
 
-| Tool | 说明 | 超时 |
-|------|------|------|
-| `web_search` | 搜索引擎查询，返回 Markdown | 25s |
-| `get_page_content` | 获取单个 URL 页面内容 | 20s |
-| `list_search_engines` | 列出可用引擎和浏览器池状态 | — |
+### web_search Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `query` | string | required | Search keywords |
+| `engine` | string | `duckduckgo` | `google` / `bing` / `duckduckgo` |
+| `depth` | int | `1` | 1=SERP only, 2=SERP+content, 3=SERP+content+outlinks |
+| `max_results` | int | `5` | Max results (1-20) |
+
+## Search Depth
+
+| Depth | Behavior | Description |
+|-------|----------|-------------|
+| `1` | SERP parsing | Default. Extracts titles, links, snippets |
+| `2` | SERP + content | Navigates to each result, extracts page content |
+| `3` | SERP + content + outlinks | Also crawls outbound links from content |
+
+## Authentication Model
+
+| Token Type | Source | Access |
+|-----------|--------|--------|
+| `ADMIN_TOKEN` | Environment variable | Admin panel API (superuser) |
+| `wsm_` API Key | Created via Admin panel | MCP / Search API |
+
+- `ADMIN_TOKEN` has superuser access to all endpoints
+- `wsm_` keys can only access MCP and search endpoints (not admin API)
+- If no `ADMIN_TOKEN` is set and no API keys exist, all endpoints are open
 
 ## REST API
 
-同时提供标准 HTTP API，可直接 curl 调用。
-
-### GET /search
+Standard HTTP API available alongside MCP.
 
 ```bash
-curl 'http://127.0.0.1:8897/search?q=python+asyncio&engine=duckduckgo&depth=1&max_results=5' \
-  -H 'Authorization: Bearer your-token'
-```
+# GET
+curl 'http://127.0.0.1:8897/search?q=python+asyncio&engine=duckduckgo&max_results=5' \
+  -H 'Authorization: Bearer wsm_your-key'
 
-### POST /search
-
-```bash
+# POST
 curl -X POST http://127.0.0.1:8897/search \
   -H 'Content-Type: application/json' \
-  -H 'Authorization: Bearer your-token' \
+  -H 'Authorization: Bearer wsm_your-key' \
   -d '{"query": "python asyncio", "engine": "duckduckgo", "depth": 2, "max_results": 5}'
 ```
 
-**参数说明：**
-
-| 参数 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `q` / `query` | string | 必填 | 搜索关键词（1-500 字符） |
-| `engine` | string | `google` | `google` / `bing` / `duckduckgo` |
-| `depth` | int | `1` | 抓取深度：1-3 |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `q` / `query` | string | required | Search keywords (1-500 chars) |
+| `engine` | string | `duckduckgo` | `google` / `bing` / `duckduckgo` |
+| `depth` | int | `1` | Scraping depth: 1-3 |
 | `format` | string | `json` | `json` / `markdown` |
-| `max_results` | int | `10` | 最大结果数（1-50） |
-| `timeout` | int | `30` | 超时秒数（5-120） |
+| `max_results` | int | `10` | Max results (1-50) |
+| `timeout` | int | `30` | Timeout in seconds (5-120) |
 
-## 引擎状态
+## Admin Dashboard
 
-| 引擎 | 状态 | 说明 |
-|------|------|------|
-| **DuckDuckGo** | 稳定可用 | 推荐默认，HTML-lite 模式 |
-| **Google** | 受限 | 部分 IP 触发验证码，自动回退 |
-| **Bing** | 可用 | `global.bing.com` 避免地域重定向 |
+Access `http://127.0.0.1:8897/admin` and login with `ADMIN_TOKEN`.
 
-> Google 被拦截时自动按 DuckDuckGo → Bing 顺序回退。
+- **Dashboard** — Search stats, CPU/memory monitoring, browser pool status, latency charts, engine distribution, success rate
+- **API Keys** — Create/revoke keys with call limits
+- **IP Bans** — Ban/unban IP addresses
+- **Search Logs** — Search history with IP filtering
 
-## 环境变量
+## Engine Status
 
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `MCP_AUTH_TOKEN` | 空 | MCP 端点认证 Token |
-| `ADMIN_TOKEN` | 空 | Admin 面板认证 Token |
-| `BROWSER_POOL_SIZE` | `5` | 初始浏览器 tab 数 |
-| `BROWSER_MAX_POOL_SIZE` | `20` | 自动扩容上限 |
-| `BROWSER_PROXY` | 空 | 代理服务器（socks5/http） |
-| `BROWSER_OS` | 空 | 目标 OS 指纹（windows/macos/linux） |
-| `BROWSER_FONTS` | 空 | 自定义字体列表 |
-| `BROWSER_BLOCK_WEBGL` | `false` | 阻止 WebGL 指纹 |
-| `BROWSER_ADDONS` | 空 | Firefox 插件路径 |
-| `MCP_PORT` | `8897` | 服务端口 |
-| `WSM_DB_PATH` | `wsm.db` | SQLite 数据库路径 |
-| `REDIS_URL` | 空 | Redis 连接地址（可选） |
+| Engine | Status | Notes |
+|--------|--------|-------|
+| **DuckDuckGo** | Stable | Recommended default, HTML-lite mode |
+| **Google** | Limited | May trigger captcha on some IPs, auto-fallback |
+| **Bing** | Available | Uses `global.bing.com` to avoid geo-redirect |
 
-## 本地开发
+> When Google is blocked, automatically falls back: DuckDuckGo → Bing.
+
+## Deployment
+
+### Endpoints
+
+| URL | Description |
+|-----|-------------|
+| `http://127.0.0.1:8897/mcp` | MCP endpoint (Streamable HTTP) |
+| `http://127.0.0.1:8897/health` | Health check |
+| `http://127.0.0.1:8897/admin` | Admin dashboard |
+| `http://127.0.0.1:8897/search` | REST API |
+
+### Reverse Proxy (Nginx)
+
+If deploying behind Nginx with HTTPS:
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:8897;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header Authorization $http_authorization;
+
+    # Required for MCP Streamable HTTP (SSE)
+    proxy_buffering off;
+    proxy_cache off;
+    proxy_http_version 1.1;
+    proxy_set_header Connection '';
+    proxy_read_timeout 120s;
+    proxy_send_timeout 120s;
+}
+```
+
+> **Cloudflare users**: Add a WAF exception rule for `/mcp` path, or use DNS-only mode (grey cloud).
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ADMIN_TOKEN` | — | Admin panel auth token (superuser) |
+| `BROWSER_POOL_SIZE` | `5` | Initial browser tab count |
+| `BROWSER_MAX_POOL_SIZE` | `20` | Auto-scaling upper limit |
+| `BROWSER_PROXY` | — | Proxy server (socks5/http) |
+| `BROWSER_OS` | — | Target OS fingerprint (windows/macos/linux) |
+| `BROWSER_FONTS` | — | Custom font list |
+| `BROWSER_BLOCK_WEBGL` | `false` | Block WebGL fingerprinting |
+| `BROWSER_ADDONS` | — | Firefox addon paths |
+| `MCP_PORT` | `8897` | Server port |
+| `WSM_DB_PATH` | `wsm.db` | SQLite database path |
+| `REDIS_URL` | — | Redis connection URL (optional) |
+
+## Development
 
 ```bash
-# 安装依赖
+# Install dependencies
 pip install -e ".[dev]"
 
-# 安装 Camoufox 浏览器
+# Install Camoufox browser
 python -m camoufox fetch
 
-# 启动服务
+# Start server
 python -m src.mcp_server --transport http --host 127.0.0.1 --port 8897
 
-# 运行测试（99 个）
+# Run tests (96 tests)
 pytest tests/ -v
 
-# 类型检查
+# Type check
 mypy src/
 
-# 代码格式化
+# Lint & format
 ruff check src/ --fix && ruff format src/
 ```
 
-## 项目结构
+## Architecture
 
 ```
 web-search-mcp/
 ├── src/
-│   ├── main.py                 # FastAPI 入口
-│   ├── mcp_server.py           # MCP 服务入口（FastMCP + 中间件 + Admin）
-│   ├── config.py               # 配置管理
+│   ├── mcp_server.py           # MCP server entry (FastMCP + middleware + Admin)
+│   ├── config.py               # Configuration management
 │   ├── api/
-│   │   ├── routes.py           # HTTP API 路由
-│   │   └── schemas.py          # Pydantic 请求/响应模型
+│   │   ├── routes.py           # HTTP API routes
+│   │   └── schemas.py          # Pydantic request/response models
 │   ├── core/
-│   │   └── search.py           # 搜索逻辑（MCP + HTTP 共用）
+│   │   └── search.py           # Search logic (shared by MCP + HTTP)
 │   ├── engine/
-│   │   ├── base.py             # 搜索引擎抽象基类
-│   │   ├── google.py           # Google（JS DOM + 验证码检测）
-│   │   ├── bing.py             # Bing（global.bing.com）
-│   │   └── duckduckgo.py       # DuckDuckGo（HTML-lite）
+│   │   ├── base.py             # Search engine abstract base class
+│   │   ├── google.py           # Google (JS DOM + captcha detection)
+│   │   ├── bing.py             # Bing (global.bing.com)
+│   │   └── duckduckgo.py       # DuckDuckGo (HTML-lite)
 │   ├── scraper/
-│   │   ├── browser.py          # BrowserPool（自动扩容 + 健康监控）
-│   │   ├── parser.py           # HTML 内容解析
-│   │   └── depth.py            # 多层深度抓取
+│   │   ├── browser.py          # BrowserPool (auto-scaling + health monitoring)
+│   │   ├── parser.py           # HTML content parser
+│   │   └── depth.py            # Multi-depth scraping
 │   ├── formatter/
-│   │   ├── json_fmt.py         # JSON 格式化
-│   │   └── markdown_fmt.py     # Markdown 格式化
+│   │   ├── json_fmt.py         # JSON formatter
+│   │   └── markdown_fmt.py     # Markdown formatter
 │   ├── admin/
-│   │   ├── database.py         # SQLite 初始化 + 迁移
-│   │   ├── repository.py       # 数据访问层
+│   │   ├── database.py         # SQLite init + migrations
+│   │   ├── repository.py       # Data access layer
 │   │   ├── routes.py           # Admin REST API
-│   │   └── static/             # Admin SPA 构建产物
+│   │   └── static/             # Admin SPA build output
 │   └── middleware/
-│       ├── api_key_auth.py     # Bearer Token 认证
-│       ├── ip_ban.py           # IP 封禁
-│       └── search_log.py       # 搜索日志
-├── admin-ui/                   # Admin 前端（React + Vite + Tailwind）
-├── tests/                      # 测试（99 个）
-├── scripts/
-│   └── mcp-server.sh           # MCP 注册管理脚本
+│       ├── api_key_auth.py     # Bearer token auth (ADMIN_TOKEN + DB keys)
+│       ├── ip_ban.py           # IP ban middleware
+│       └── search_log.py       # Search logging middleware
+├── admin-ui/                   # Admin frontend (React + Vite + Tailwind)
+├── tests/                      # Test suite (96 tests)
 ├── docker-compose.yml
 ├── Dockerfile
 └── pyproject.toml
 ```
 
-## 技术栈
+## Tech Stack
 
-| 组件 | 技术 |
-|------|------|
-| Web 框架 | FastAPI + Uvicorn + Starlette |
-| MCP 框架 | FastMCP (mcp>=1.25.0) |
-| 浏览器引擎 | Camoufox（反检测 Firefox，Playwright 驱动） |
-| 异步运行时 | asyncio + Semaphore 并发控制 |
-| HTML 解析 | BeautifulSoup4 + lxml |
-| 内容转换 | markdownify（HTML → Markdown） |
-| 数据库 | SQLite (aiosqlite) |
-| 缓存 | Redis（可选） |
-| Admin 前端 | React + Vite + Tailwind CSS + recharts |
-| 数据校验 | Pydantic v2 |
+| Component | Technology |
+|-----------|-----------|
+| Web Framework | FastAPI + Uvicorn + Starlette |
+| MCP Framework | FastMCP (mcp >= 1.25.0) |
+| Browser Engine | Camoufox (anti-detection Firefox, Playwright) |
+| Async Runtime | asyncio + Semaphore concurrency control |
+| HTML Parsing | BeautifulSoup4 + lxml |
+| Content Conversion | markdownify (HTML → Markdown) |
+| Database | SQLite (aiosqlite) |
+| Cache | Redis (optional) |
+| Admin Frontend | React + Vite + Tailwind CSS + recharts |
+| Validation | Pydantic v2 |
+
+---
+
+## 功能特性
+
+- **三大搜索引擎** — Google、Bing、DuckDuckGo，自动回退
+- **多层深度抓取** — SERP 解析 → 正文提取 → 外链抓取
+- **反检测浏览器** — Camoufox 真实浏览器指纹（GeoIP、Humanize、Locale）
+- **自动扩容** — 浏览器池并发达 80% 时自动扩容，上限可配
+- **Admin 管理面板** — 搜索统计、系统监控、API Key 管理、IP 封禁
+- **API Key 认证** — 内置密钥生成（`wsm_` 前缀），支持调用限额和吊销
+- **双格式输出** — JSON / Markdown
+- **REST API** — 标准 HTTP API，与 MCP 协议并行提供
+
+## 快速开始
+
+### Docker 部署（推荐）
+
+```bash
+git clone https://github.com/nicepkg/web-search-mcp.git
+cd web-search-mcp
+
+# 配置环境变量
+cp .env.example .env
+# 编辑 .env，设置 ADMIN_TOKEN
+
+# 启动服务
+docker compose up -d
+
+# 验证
+curl http://127.0.0.1:8897/health
+```
+
+### 创建 API Key 并注册到 Claude Code
+
+```bash
+# 1. 通过 Admin API 创建 API Key
+curl -X POST http://127.0.0.1:8897/admin/api/keys \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "claude-code", "call_limit": 10000}'
+# 保存返回的 wsm_xxx 密钥（仅创建时可见）
+
+# 2. 注册 MCP 到 Claude Code
+claude mcp add-json -s user web-search-fast '{
+  "type": "http",
+  "url": "http://127.0.0.1:8897/mcp",
+  "headers": {"Authorization": "Bearer wsm_your-api-key-here"}
+}'
+
+# 3. 重启 Claude Code 会话
+```
+
+也可以访问 `http://127.0.0.1:8897/admin` 通过 Admin 面板可视化创建密钥。
+
+### 本地 stdio 模式
+
+无需 Docker，Claude Code 直接通过 stdin/stdout 通信：
+
+```bash
+pip install -e .
+python -m camoufox fetch
+
+claude mcp add-json -s user web-search-fast '{
+  "type": "stdio",
+  "command": "python",
+  "args": ["-m", "src.mcp_server", "--transport", "stdio"],
+  "env": {"PYTHONUNBUFFERED": "1"},
+  "cwd": "'$(pwd)'"
+}'
+```
+
+### 认证模型
+
+| Token 类型 | 来源 | 访问范围 |
+|-----------|------|---------|
+| `ADMIN_TOKEN` | 环境变量 | Admin 面板 API（超级权限） |
+| `wsm_` API Key | Admin 面板创建 | MCP / 搜索 API |
+
+- `ADMIN_TOKEN` 拥有所有端点的超级权限
+- `wsm_` 密钥只能访问 MCP 和搜索端点（不能访问 Admin API）
+- 如果未配置 `ADMIN_TOKEN` 且无 API Key，所有端点开放访问
+
+### 反向代理注意事项
+
+使用 Nginx 反向代理时，MCP Streamable HTTP 需要关闭缓冲：
+
+```nginx
+proxy_buffering off;
+proxy_http_version 1.1;
+proxy_set_header Connection '';
+proxy_read_timeout 120s;
+```
+
+
+### Claude Code 如何默认使用这个工具进行搜索
+
+>编辑 `~/.claude/CLAUDE.md` 添加下面的内容
+
+
+```markdown
+
+## Web Search
+
+* 优先使用 `web-search-fast`
+
+```
+
+
+> **Cloudflare 用户**：需要为 `/mcp` 路径添加 WAF 例外规则，或使用 DNS-only 模式（灰色云朵）。
 
 ## License
 
-MIT
+[MIT](LICENSE)

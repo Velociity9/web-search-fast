@@ -7,7 +7,6 @@ services:
     ports:
       - "${MCP_PORT:-8897}:8897"
     environment:
-      - MCP_AUTH_TOKEN=${MCP_AUTH_TOKEN:-}
       - MCP_TRANSPORT=http
       - MCP_HOST=0.0.0.0
       - MCP_PORT=8897

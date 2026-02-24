@@ -1,7 +1,7 @@
 """Admin REST API routes — /admin/api/* endpoints.
 
-Auth is handled by APIKeyAuthMiddleware (supports ADMIN_TOKEN, MCP_AUTH_TOKEN,
-and database API keys). No per-route auth checks needed here.
+Auth is handled by APIKeyAuthMiddleware (supports ADMIN_TOKEN env var
+and database API keys with wsm_ prefix). No per-route auth checks needed here.
 """
 from __future__ import annotations
 

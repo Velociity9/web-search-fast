@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, AsyncIterator
 
 from mcp.server.fastmcp import Context, FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 if TYPE_CHECKING:
     from src.scraper.browser import BrowserPool
@@ -89,6 +90,9 @@ async def lifespan(server: FastMCP) -> AsyncIterator[dict]:
 
 mcp = FastMCP(
     "web-search-fast",
+    transport_security=TransportSecuritySettings(
+        enable_dns_rebinding_protection=False,
+    ),
     instructions=(
         "Real-time web search and page reading service using a stealth browser. "
         "Use this when you need CURRENT information that may be beyond your training data, including: "

@@ -109,6 +109,9 @@ class SearchLogMiddleware:
                     args = params.get("arguments", {})
                     query_text = args.get("query", "")
                     engine = args.get("engine", "")
+                    # Default engine for web_search when client omits it
+                    if tool_name == "web_search" and not engine:
+                        engine = "duckduckgo"
                 elif "arguments" in params:
                     args = params["arguments"]
                     query_text = args.get("query", "")

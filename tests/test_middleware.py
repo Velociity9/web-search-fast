@@ -77,21 +77,21 @@ class TestAPIKeyAuthMiddleware:
 
     def test_no_auth_when_no_token_and_no_keys(self):
         from src.middleware.api_key_auth import APIKeyAuthMiddleware
-        with _patch_env("MCP_AUTH_TOKEN", ""):
+        with _patch_env("ADMIN_TOKEN", ""):
             client = _make_app_with_middleware(APIKeyAuthMiddleware)
             resp = client.get("/mcp")
             assert resp.status_code == 200
 
-    def test_env_token_works(self):
+    def test_admin_token_works(self):
         from src.middleware.api_key_auth import APIKeyAuthMiddleware
-        with _patch_env("MCP_AUTH_TOKEN", "my-secret"):
+        with _patch_env("ADMIN_TOKEN", "my-secret"):
             client = _make_app_with_middleware(APIKeyAuthMiddleware)
             resp = client.get("/mcp", headers={"Authorization": "Bearer my-secret"})
             assert resp.status_code == 200
 
     def test_wrong_token_rejected(self):
         from src.middleware.api_key_auth import APIKeyAuthMiddleware
-        with _patch_env("MCP_AUTH_TOKEN", "my-secret"):
+        with _patch_env("ADMIN_TOKEN", "my-secret"):
             client = _make_app_with_middleware(APIKeyAuthMiddleware)
             resp = client.get("/mcp", headers={"Authorization": "Bearer wrong"})
             assert resp.status_code == 403
@@ -102,9 +102,31 @@ class TestAPIKeyAuthMiddleware:
         from src.middleware.api_key_auth import APIKeyAuthMiddleware
 
         key = await create_api_key("test-key", call_limit=10)
-        with _patch_env("MCP_AUTH_TOKEN", ""):
+        with _patch_env("ADMIN_TOKEN", ""):
             client = _make_app_with_middleware(APIKeyAuthMiddleware)
             resp = client.get("/mcp", headers={"Authorization": f"Bearer {key.key}"})
+            assert resp.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_wsm_key_rejected_on_admin_api(self):
+        """wsm_ API keys must NOT access /admin/api/* routes."""
+        from src.admin.repository import create_api_key
+        from src.middleware.api_key_auth import APIKeyAuthMiddleware
+
+        key = await create_api_key("test-key", call_limit=100)
+        with _patch_env("ADMIN_TOKEN", "admin-secret"):
+            client = _make_app_with_middleware(APIKeyAuthMiddleware)
+            # wsm_ key on admin API → 403
+            resp = client.get("/admin/api/test", headers={"Authorization": f"Bearer {key.key}"})
+            assert resp.status_code == 403
+            assert "ADMIN_TOKEN" in resp.json()["error"]
+
+    def test_admin_token_accesses_admin_api(self):
+        """ADMIN_TOKEN can access /admin/api/* routes."""
+        from src.middleware.api_key_auth import APIKeyAuthMiddleware
+        with _patch_env("ADMIN_TOKEN", "admin-secret"):
+            client = _make_app_with_middleware(APIKeyAuthMiddleware)
+            resp = client.get("/admin/api/test", headers={"Authorization": "Bearer admin-secret"})
             assert resp.status_code == 200
 
     @pytest.mark.asyncio
@@ -113,7 +135,7 @@ class TestAPIKeyAuthMiddleware:
         from src.middleware.api_key_auth import APIKeyAuthMiddleware
 
         key = await create_api_key("limited-key", call_limit=1)
-        with _patch_env("MCP_AUTH_TOKEN", ""):
+        with _patch_env("ADMIN_TOKEN", ""):
             client = _make_app_with_middleware(APIKeyAuthMiddleware)
             # First call succeeds
             resp = client.get("/mcp", headers={"Authorization": f"Bearer {key.key}"})

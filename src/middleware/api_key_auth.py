@@ -20,10 +20,12 @@ _ADMIN_STATIC_PREFIXES = ("/admin/assets/",)
 class APIKeyAuthMiddleware(BaseHTTPMiddleware):
     """Validate API key from Bearer token.
 
-    Priority:
-    1. ADMIN_TOKEN env var (for admin panel access)
-    2. MCP_AUTH_TOKEN env var (for MCP/search API backward compatibility)
-    3. Database API key lookup
+    Auth model:
+    - ADMIN_TOKEN env var: grants access to admin panel API (/admin/api/*)
+    - Database API keys (wsm_ prefix): grants access to MCP/search endpoints
+    - ADMIN_TOKEN also grants access to MCP/search endpoints (superuser)
+
+    If no ADMIN_TOKEN is set and no DB keys exist, all endpoints are open.
     """
 
     async def dispatch(self, request: Request, call_next):  # type: ignore[override]
@@ -45,11 +47,10 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         auth_header = request.headers.get("authorization", "")
-        env_token = os.environ.get("MCP_AUTH_TOKEN", "")
         admin_token = os.environ.get("ADMIN_TOKEN", "")
 
-        # If no auth configured at all (no env tokens and no DB keys), pass through
-        if not env_token and not admin_token:
+        # If no auth configured at all (no ADMIN_TOKEN and no DB keys), pass through
+        if not admin_token:
             try:
                 from src.admin.repository import list_api_keys
                 keys = await list_api_keys()
@@ -63,17 +64,16 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
 
         token = auth_header[7:]
 
-        # 1. Check ADMIN_TOKEN (admin panel access)
+        # 1. Check ADMIN_TOKEN (superuser — access to everything)
         if admin_token and token == admin_token:
             request.state.api_key_id = None
             return await call_next(request)
 
-        # 2. Check MCP_AUTH_TOKEN (backward compat)
-        if env_token and token == env_token:
-            request.state.api_key_id = None
-            return await call_next(request)
+        # 2. Admin API routes require ADMIN_TOKEN — wsm_ keys cannot access
+        if path.startswith("/admin/api/"):
+            return JSONResponse({"error": "Admin API requires ADMIN_TOKEN"}, status_code=403)
 
-        # 3. Check database API keys
+        # 3. Check database API keys (wsm_ prefix) — MCP/search only
         try:
             from src.admin.repository import increment_call_count, verify_api_key
             key = await verify_api_key(token)
